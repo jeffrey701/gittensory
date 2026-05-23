@@ -56,7 +56,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
         return undefined;
       },
     } as unknown as Queue,
-    GITHUB_APP_ID: "0",
+    GITHUB_APP_ID: "3824093",
     GITHUB_APP_SLUG: "gittensory",
     GITTENSOR_REGISTRY_URL: "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/validator/weights/master_repositories.json",
     PUBLIC_API_ORIGIN: "https://gittensory-api.zeronode.workers.dev",
