@@ -45,15 +45,3 @@
 
 
 
-### Fixes
-
-- Gate public PR visibility for confirmed miners
-
-
-
-### Tests
-
-- Raise backend regression coverage
-
-
-
