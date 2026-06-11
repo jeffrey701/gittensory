@@ -126,6 +126,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
           description: "Deterministic base-agent layer for Gittensor OSS contribution mining.",
         }),
       },
+      // Self-hosted, privacy-friendly Umami analytics (cookieless, no PII).
+      {
+        src: "https://tasty.aethereal.dev/script.js",
+        defer: true,
+        "data-website-id": "2ec37da2-e519-4bd5-bc16-76e17b03a458",
+      },
     ],
   }),
   shellComponent: RootShell,
