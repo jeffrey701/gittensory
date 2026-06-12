@@ -63,6 +63,7 @@ import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, f
 import { createOrUpdateCheckRun, createOrUpdateGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
 import { createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
 import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
+import { buildPublicPrAssessment } from "../services/ai-summaries";
 import {
   buildMaintainerQueueDigest,
   buildPublicAgentCommandComment,
@@ -1004,7 +1005,25 @@ async function maybePublishPrPublicSurface(
   }
 
   if (decision.willComment) {
-    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation };
+    // Known contributor (detected): generate the combined AI assessment (public-safe, budget-guarded,
+    // fail-safe to null when AI is disabled/over budget/unsafe). Newcomers get the minimal invite (no AI).
+    const aiAssessment = detection.detected
+      ? await buildPublicPrAssessment(env, {
+          bundle: {
+            prTitle: pr.title,
+            prBody: (pr.body ?? "").slice(0, 1200),
+            linkedIssues: pr.linkedIssues ?? [],
+            signals: preflight.findings
+              .filter((finding) => finding.severity !== "critical")
+              .map((finding) => finding.publicText ?? finding.title)
+              .filter(Boolean)
+              .slice(0, 6),
+          },
+          actor: author,
+          route: "github_app",
+        })
+      : null;
+    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation, aiAssessment: aiAssessment ?? undefined };
     const deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
     try {
       await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, deterministicBody);

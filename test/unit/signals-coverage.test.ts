@@ -951,12 +951,15 @@ describe("signal coverage edge cases", () => {
       collisions,
       preflight,
       settings: { ...repoSettings(directRepo.fullName), gateCheckMode: "enabled" },
+      aiAssessment: "- Adds an isolated docs cleanup.\n- Tip: link the issue this addresses to speed review.",
     });
 
     expect(comment).toContain("> | Related work | ✅ No active overlap found | No same-issue or scoped active PR overlap found. | No action. |");
     expect(comment).toContain("> | Gate result | ✅ Passing | No configured blocker found. | No action. |");
     expect(comment).not.toContain("possible overlap");
     expect(comment).not.toContain("12");
+    expect(comment).toContain("🤖 AI assessment");
+    expect(comment).toContain("Tip: link the issue this addresses");
   });
 
   it("posts a minimal earn-invite (no readiness panel) for a non-registered contributor", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   __aiSummaryInternals,
+  buildPublicPrAssessment,
   rewritePublicPrIntelligenceComment,
   rewriteSignalBundleWithAi,
   summarizeAgentBundleWithAi,
@@ -8,6 +9,31 @@ import {
 import type { AgentRunBundle } from "../../src/services/agent-orchestrator";
 import { FORBIDDEN_PUBLIC_COMMENT_WORDS } from "../../src/queue-intelligence";
 import { createTestEnv } from "../helpers/d1";
+
+describe("public PR AI assessment (#15)", () => {
+  const bundle = { prTitle: "Add docs", linkedIssues: [], signals: ["No linked issue found."] };
+
+  it("returns a combined assessment when public AI is enabled", async () => {
+    const run = vi.fn(async () => ({ response: "- Adds documentation.\n- Linking an issue would help reviewers." }));
+    const env = createTestEnv({ AI: { run } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "10000" });
+    const text = await buildPublicPrAssessment(env, { bundle, actor: "dev", route: "github_app" });
+    expect(text).toContain("Adds documentation");
+    expect(run).toHaveBeenCalled();
+  });
+
+  it("returns null when public AI comments are disabled (deterministic panel stands alone)", async () => {
+    const run = vi.fn();
+    const env = createTestEnv({ AI: { run } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "false" });
+    expect(await buildPublicPrAssessment(env, { bundle })).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the model emits forbidden public wording (never leaks reward/score language)", async () => {
+    const run = vi.fn(async () => ({ response: "This PR improves your rewards and trust score." }));
+    const env = createTestEnv({ AI: { run } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "10000" });
+    expect(await buildPublicPrAssessment(env, { bundle })).toBeNull();
+  });
+});
 
 const PUBLIC_FORBIDDEN_TEXT =
   /\b(wallets?|hotkeys?|raw trust scores?|trust scores?|payouts?|estimated rewards?|rewards?|reward estimates?|farming|scoreability|reviewability(?: internals?)?|private reviewability|private scoreability|private rankings?|rankings?|public score estimates?)\b/i;

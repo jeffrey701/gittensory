@@ -11,8 +11,8 @@ interface __BaseEnv_Env {
 	GITHUB_OAUTH_CLIENT_SECRET: string;
 	GITTENSOR_REGISTRY_URL: "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/validator/weights/master_repositories.json";
 	PUBLIC_API_ORIGIN: "https://gittensory-api.aethereal.dev";
-	AI_SUMMARIES_ENABLED: "false";
-	AI_PUBLIC_COMMENTS_ENABLED: "false";
+	AI_SUMMARIES_ENABLED: "true";
+	AI_PUBLIC_COMMENTS_ENABLED: "true";
 	WORKERS_AI_SUMMARY_MODEL: "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
 	AI_DAILY_NEURON_BUDGET: "10000";
 	AI_MAX_OUTPUT_TOKENS: "256";

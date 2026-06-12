@@ -3557,6 +3557,10 @@ export function buildPublicPrIntelligenceComment(args: {
   preflight: PreflightResult;
   settings: RepositorySettings;
   gate?: PublicPrPanelGateEvaluation | undefined;
+  /** Optional combined AI assessment (useful to both contributor and maintainer), rendered as a
+   *  section for known contributors. Omitted when AI is disabled / over budget / unsafe, so the
+   *  deterministic panel always stands on its own. */
+  aiAssessment?: string | undefined;
 }): string {
   const publicFindings = args.preflight.findings
     .filter((finding) => finding.severity !== "critical")
@@ -3674,6 +3678,9 @@ export function buildPublicPrIntelligenceComment(args: {
       ...rows.map(([signal, result, evidence, action]) => `| ${escapeTableCell(signal)} | ${escapeTableCell(result)} | ${escapeTableCell(evidence)} | ${escapeTableCell(action)} |`),
     ]),
     "",
+    ...(args.aiAssessment
+      ? ["### 🤖 AI assessment", "", args.aiAssessment, "", "_AI-generated from public GitHub metadata; the deterministic signals above remain authoritative._", ""]
+      : []),
     "<details>",
     "<summary>Signal definitions</summary>",
     "",

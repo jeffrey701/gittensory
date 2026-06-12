@@ -344,6 +344,30 @@ export async function rewritePublicPrIntelligenceComment(
   return { body, outcome };
 }
 
+/**
+ * Combined, public-safe PR assessment for the PR-intelligence panel — useful to BOTH the contributor
+ * (how to get this PR reviewed and accepted faster) and the maintainer (what it does + any risk).
+ * Reuses the budget / sanitizer / fail-safe machinery: returns `null` whenever AI is disabled, over
+ * budget, unavailable, or produces unsafe/empty output, so the panel simply omits the section and the
+ * deterministic comment is never blocked.
+ */
+export async function buildPublicPrAssessment(
+  env: Env,
+  args: { bundle: Record<string, JsonValue>; actor?: string | null | undefined; route?: string | null | undefined },
+): Promise<string | null> {
+  const outcome = await rewriteSignalBundleWithAi(env, {
+    feature: "pr_assessment_comment",
+    visibility: "public",
+    bundle: args.bundle,
+    fallbackText: "",
+    instructions:
+      "Write a brief, friendly PUBLIC GitHub comment section assessing this pull request — useful to BOTH the contributor and the maintainer. Use 2-4 short bullet points covering: what the PR appears to do, what would help it get reviewed and accepted faster (e.g. linking an issue, adding a validation or test note, tightening scope), and any obvious risk or gap. Base it ONLY on the provided signals; do not invent facts or promise any outcome. Never mention rewards, rankings, payouts, wallets, hotkeys, raw or estimated trust scores, score estimates, scoreability, reviewability, or farming.",
+    actor: args.actor,
+    route: args.route,
+  });
+  return outcome.status === "ok" && outcome.text.trim() ? outcome.text.trim() : null;
+}
+
 function buildBundlePrompt(signalBundle: Record<string, JsonValue>, visibility: AiSummaryVisibility): string {
   return [
     `Visibility: ${visibility}`,
