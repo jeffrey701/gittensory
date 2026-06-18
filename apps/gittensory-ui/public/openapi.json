@@ -14146,7 +14146,7 @@
               "example": "public"
             },
             "required": false,
-            "description": "Report variant. Operator reports require the operator app role.",
+            "description": "Report variant. Requires the operator app role because reports use deployment-wide analytics.",
             "name": "variant",
             "in": "query"
           },
@@ -14199,7 +14199,7 @@
             "description": "Unauthorized"
           },
           "403": {
-            "description": "Insufficient app role for requested report variant"
+            "description": "Operator app role required"
           }
         },
         "security": [

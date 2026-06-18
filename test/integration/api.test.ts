@@ -2261,19 +2261,8 @@ describe("api routes", () => {
       ownerEnv,
     );
     expect(settingsForbidden.status).toBe(403);
-    const ownerWeeklyReport = await app.request("/v1/app/analytics/weekly-value-report", { headers: ownerHeaders }, ownerEnv);
-    expect(ownerWeeklyReport.status).toBe(200);
-    const ownerWeeklyReportBody = await ownerWeeklyReport.json();
-    expect(ownerWeeklyReportBody).toMatchObject({ variant: "public", publicSafe: true });
-    expect(ownerWeeklyReportBody).not.toHaveProperty("operatorDetails");
-    const ownerWeeklyReportMarkdown = await app.request("/v1/app/analytics/weekly-value-report?format=markdown", { headers: ownerHeaders }, ownerEnv);
-    expect(ownerWeeklyReportMarkdown.status).toBe(200);
-    expect(ownerWeeklyReportMarkdown.headers.get("content-type")).toContain("text/markdown");
-    const ownerWeeklyReportMarkdownText = await ownerWeeklyReportMarkdown.text();
-    expect(ownerWeeklyReportMarkdownText).toContain("# Weekly Gittensory value report");
-    expect(ownerWeeklyReportMarkdownText).toContain("## Maintainer trust");
-    expect(ownerWeeklyReportMarkdownText).not.toContain("## Operator detail");
-    expect(ownerWeeklyReportMarkdownText).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
+    expect((await app.request("/v1/app/analytics/weekly-value-report", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
+    expect((await app.request("/v1/app/analytics/weekly-value-report?format=markdown", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/weekly-value-report?variant=operator", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
     const ownerExtensionSession = await app.request("/v1/auth/extension/session", { method: "POST", headers: ownerHeaders }, ownerEnv);
     expect(ownerExtensionSession.status).toBe(201);

@@ -695,7 +695,7 @@ export function buildOpenApiSpec() {
       query: z.object({
         variant: z.enum(["public", "operator"]).optional().openapi({
           param: {
-            description: "Report variant. Operator reports require the operator app role.",
+            description: "Report variant. Requires the operator app role because reports use deployment-wide analytics.",
           },
           example: "public",
         }),
@@ -724,7 +724,7 @@ export function buildOpenApiSpec() {
         },
       },
       401: { description: "Unauthorized" },
-      403: { description: "Insufficient app role for requested report variant" },
+      403: { description: "Operator app role required" },
     },
   });
   registry.registerPath({

@@ -1293,11 +1293,9 @@ export function createApp() {
   });
 
   app.get("/v1/app/analytics/weekly-value-report", async (c) => {
-    const variant = c.req.query("variant") === "operator" ? "operator" : "public";
-    const allowedRoles: ControlPanelRoleName[] =
-      variant === "operator" ? ["operator"] : ["miner", "maintainer", "owner", "operator"];
-    const forbidden = await requireAppRole(c, allowedRoles);
+    const forbidden = await requireAppRole(c, ["operator"]);
     if (forbidden) return forbidden;
+    const variant = c.req.query("variant") === "operator" ? "operator" : "public";
     const days = Math.max(1, Math.min(31, Number(c.req.query("days") ?? 7) || 7));
     const report = await loadWeeklyValueReport(c.env, { variant, days });
     if (c.req.query("format") === "markdown") {
