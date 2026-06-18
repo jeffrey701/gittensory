@@ -613,7 +613,8 @@ describe("advisory rules", () => {
     const { annotations } = buildCheckRunAnnotations(advisory, { files, collisions, pullNumber: 14 }, "standard");
 
     expect(annotations.some((entry) => entry.annotation_level === "notice" && entry.title === "Possible duplicate overlap")).toBe(true);
-    expect(annotations.some((entry) => entry.annotation_level === "failure" && entry.title === "Issue discovery is disabled for this repo")).toBe(true);
+    expect(annotations.some((entry) => entry.annotation_level === "failure" && entry.title === "Gittensory public finding")).toBe(true);
+    expect(annotations.some((entry) => entry.title === "Issue discovery is disabled for this repo")).toBe(false);
     expect(annotations.some((entry) => entry.title === "Missing test evidence")).toBe(false);
   });
 
@@ -666,8 +667,10 @@ describe("advisory rules", () => {
     };
 
     const { annotations } = buildCheckRunAnnotations(advisory, { files, collisions, pullNumber: 15 }, "deep");
-    expect(annotations.some((entry) => entry.annotation_level === "notice" && entry.title === "Configured lane")).toBe(true);
-    expect(annotations.some((entry) => entry.annotation_level === "warning" && entry.title === "Queue pressure")).toBe(true);
+    expect(annotations.some((entry) => entry.annotation_level === "notice" && entry.title === "Gittensory public finding")).toBe(true);
+    expect(annotations.some((entry) => entry.annotation_level === "warning" && entry.title === "Gittensory public finding")).toBe(true);
+    expect(annotations.some((entry) => entry.title === "Configured lane")).toBe(false);
+    expect(annotations.some((entry) => entry.title === "Queue pressure")).toBe(false);
     expect(annotations.some((entry) => entry.title === "   ")).toBe(false);
   });
 
@@ -750,7 +753,8 @@ describe("advisory rules", () => {
 
     expect(annotations.some((entry) => entry.title === "Missing test evidence")).toBe(false);
     expect(annotations.some((entry) => entry.title === "Possible duplicate overlap")).toBe(false);
-    expect(annotations.filter((entry) => entry.title === "Configured lane")).toHaveLength(2);
+    expect(annotations.filter((entry) => entry.title === "Gittensory public finding")).toHaveLength(2);
+    expect(annotations.some((entry) => entry.title === "Configured lane")).toBe(false);
   });
 
   it("buildCheckRunAnnotations deduplicates identical hotspot annotations", () => {

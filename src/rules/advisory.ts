@@ -265,7 +265,7 @@ export function buildCheckRunAnnotations(
         path,
         1,
         severityToAnnotationLevel(finding.severity),
-        finding.title,
+        "Gittensory public finding",
         finding.publicText,
       );
     }
