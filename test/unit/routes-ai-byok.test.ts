@@ -175,6 +175,42 @@ describe("maintainer route authz (session-scoped)", () => {
     expect((await app.request(`${OWNED}/ai-key`, { headers: { cookie: `gittensory_session=${token}` } }, env)).status).toBe(200);
   });
 
+  it("forbids a read-only collaborator from writing repo-visible settings", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "" });
+    await seedRepo(env, "repo-owner", "owned-repo", 201);
+    // "reader" is in the broader maintainer data scope via PR author association, but only has read permission.
+    await upsertPullRequestFromGitHub(env, "repo-owner/owned-repo", { number: 6, title: "docs", state: "open", user: { login: "reader" }, author_association: "COLLABORATOR", head: { sha: "b2", ref: "docs" }, base: { ref: "main" }, labels: [] });
+    stubMinerFetch();
+    mockedPermission.mockResolvedValue("read");
+    const { token } = await createSessionForGitHubUser(env, { login: "reader", id: 777 });
+    const res = await app.request(`${OWNED}/settings`, {
+      method: "PUT",
+      headers: { cookie: `gittensory_session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ gateCheckMode: "enabled", commandAuthorization: { default: ["pr_author"], commands: { "gate-override": ["pr_author"] } } }),
+    }, env);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "insufficient_repo_permission" });
+    expect(mockedPermission).toHaveBeenCalledWith(env, 201, "repo-owner/owned-repo", "reader");
+  });
+
+  it("allows a repo owner with write permission to update repo-visible settings", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "" });
+    await seedRepo(env, "repo-owner", "owned-repo", 201);
+    stubMinerFetch();
+    mockedPermission.mockResolvedValue("write");
+    const { token } = await createSessionForGitHubUser(env, { login: "repo-owner", id: 201 });
+    const res = await app.request(`${OWNED}/settings`, {
+      method: "PUT",
+      headers: { cookie: `gittensory_session=${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ gateCheckMode: "enabled", publicSurface: "comment_only" }),
+    }, env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ gateCheckMode: "enabled", publicSurface: "comment_only" });
+    expect(mockedPermission).toHaveBeenCalledWith(env, 201, "repo-owner/owned-repo", "repo-owner");
+  });
+
   it("allows an operator to set the BYOK key without a per-repo push check", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "ops-admin" });

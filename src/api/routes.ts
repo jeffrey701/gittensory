@@ -2000,7 +2000,7 @@ export function createApp() {
   // aiReview key + the operator-only scoring internals are deliberately not settable here.
   app.put("/v1/repos/:owner/:repo/settings", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const gate = await requireRepoMaintainer(c, fullName);
+    const gate = await requireRepoWriteAccess(c, fullName);
     if (gate instanceof Response) return gate;
     const body = await c.req.json().catch(() => null);
     const parsed = maintainerSettingsSchema.safeParse(body);
