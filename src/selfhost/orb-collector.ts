@@ -134,6 +134,10 @@ export async function exportOrbBatch(db: D1Database, batchSize = 200, fetchFn: t
   const collectorUrl = process.env.ORB_COLLECTOR_URL ?? "https://gittensory-api.aethereal.dev/v1/orb/ingest";
   const secret = process.env.ORB_WEBHOOK_SECRET ?? "";
   const anonymize = (process.env.ORB_ANONYMIZE ?? "true").toLowerCase() !== "false";
+  if (anonymize && secret.trim().length < 32) {
+    incr("gittensory_orb_export_errors_total", { reason: "missing_anonymization_secret" });
+    return 0;
+  }
   const instance = instanceId();
 
   // Read this instance's export watermark (resumes where the last run left off).

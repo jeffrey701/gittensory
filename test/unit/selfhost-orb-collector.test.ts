@@ -57,7 +57,7 @@ describe("exportOrbBatch() — reads review_audit, ships anonymized reversal-awa
   beforeEach(() => {
     resetMetrics();
     process.env.ORB_ENABLED = "true";
-    process.env.ORB_WEBHOOK_SECRET = "test-secret";
+    process.env.ORB_WEBHOOK_SECRET = "test-secret-at-least-32-bytes-long";
     process.env.ORB_APP_ID = "555";
     process.env.ORB_ANONYMIZE = "true";
     delete process.env.ORB_AIR_GAP;
@@ -164,9 +164,32 @@ describe("exportOrbBatch() — reads review_audit, ships anonymized reversal-awa
     expect(sig).toMatch(/^sha256=[a-f0-9]{64}$/);
   });
 
-  it("falls back to GITHUB_APP_ID for the instance id and applies secret/anonymize defaults when ORB_* are unset", async () => {
+  it("fails closed when anonymized export has no strong per-instance secret", async () => {
+    delete process.env.ORB_WEBHOOK_SECRET;
+    delete process.env.ORB_ANONYMIZE; // → defaults to "true"
+    const db = makeDb();
+    await audit(db, "owner/repo", 1, "gate_decision", "merge", "2026-01-01T00:00:00Z");
+    await audit(db, "owner/repo", 1, "pr_outcome", "merged", "2026-01-01T01:00:00Z");
+    let called = false;
+    const n = await exportOrbBatch(db, 200, async () => { called = true; return new Response(null, { status: 200 }); });
+    expect(n).toBe(0);
+    expect(called).toBe(false);
+    expect(await renderMetrics()).toContain(`gittensory_orb_export_errors_total{reason="missing_anonymization_secret"} 1`);
+  });
+
+  it("fails closed when anonymized export has a weak per-instance secret", async () => {
+    process.env.ORB_WEBHOOK_SECRET = "short-secret";
+    const db = makeDb();
+    await audit(db, "owner/repo", 1, "gate_decision", "merge", "2026-01-01T00:00:00Z");
+    await audit(db, "owner/repo", 1, "pr_outcome", "merged", "2026-01-01T01:00:00Z");
+    let called = false;
+    const n = await exportOrbBatch(db, 200, async () => { called = true; return new Response(null, { status: 200 }); });
+    expect(n).toBe(0);
+    expect(called).toBe(false);
+  });
+
+  it("falls back to GITHUB_APP_ID for the instance id while using a configured anonymization secret", async () => {
     delete process.env.ORB_APP_ID; // → falls through to GITHUB_APP_ID
-    delete process.env.ORB_WEBHOOK_SECRET; // → secret defaults to ""
     delete process.env.ORB_ANONYMIZE; // → defaults to "true"
     (process.env as NodeJS.Dict<string>).GITHUB_APP_ID = "999";
     const db = makeDb();
