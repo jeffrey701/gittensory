@@ -9,8 +9,8 @@ function openPr(number: number, title: string, linkedIssues: number[] = [], auth
   return { repoFullName: "acme/widgets", number, title, state: "open", authorLogin, linkedIssues, labels: [] };
 }
 
-function openIssue(number: number, title: string): IssueRecord {
-  return { repoFullName: "acme/widgets", number, title, state: "open", labels: [], linkedPrs: [], authorAssociation: null } as IssueRecord;
+function openIssue(number: number, title: string, authorLogin?: string | null): IssueRecord {
+  return { repoFullName: "acme/widgets", number, title, state: "open", labels: [], linkedPrs: [], authorAssociation: null, authorLogin } as IssueRecord;
 }
 
 const BASE_INPUT: PredictedGateInput = {
@@ -70,6 +70,18 @@ describe("buildPredictedGateVerdict", () => {
     const result = verdict({ gate: { linkedIssue: "block" }, input: { body: "Closes #7", linkedIssues: [] } });
     expect(result.conclusion).toBe("success");
     expect(result.blockers.some((b) => b.code === "missing_linked_issue")).toBe(false);
+  });
+
+  it("predicts a BLOCK when the public self-authored linked-issue gate has issue-author evidence", () => {
+    const result = verdict({ gate: { selfAuthoredLinkedIssue: "block" }, issues: [openIssue(7, "Uploads should retry on 5xx", "Miner1")] });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.some((b) => b.code === "self_authored_linked_issue")).toBe(true);
+  });
+
+  it("does not predict the self-authored linked-issue finding when issue-author evidence is absent", () => {
+    const result = verdict({ gate: { selfAuthoredLinkedIssue: "block" }, issues: [openIssue(7, "Uploads should retry on 5xx")] });
+    expect(result.conclusion).toBe("success");
+    expect(result.blockers.some((b) => b.code === "self_authored_linked_issue")).toBe(false);
   });
 
   it("honors public gate.mergeReadiness when predicting blockers", () => {

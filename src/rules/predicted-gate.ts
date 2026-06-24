@@ -141,7 +141,19 @@ export function buildPredictedGateVerdict(args: {
   // LOSER, never the winner. So the predictor must keep showing the duplicate finding (the honest pre-submit
   // answer). Threading the flag here would let isDuplicateClusterWinner(0, …) treat #0 as the winner and
   // falsely suppress the block — a false-optimism regression. Do NOT add it without modeling #0 as the loser.
-  const advisory = buildPullRequestAdvisory(repo, syntheticPr, { otherOpenPullRequests: pullRequests, requireLinkedIssue });
+  const issueAuthorsByNumber = new Map(
+    issues
+      .filter((issue) => issue.repoFullName === input.repoFullName)
+      .map((issue) => [issue.number, issue.authorLogin]),
+  );
+  const linkedIssueAuthorLogins = syntheticPr.linkedIssues.map(
+    (issueNumber) => issueAuthorsByNumber.get(issueNumber) ?? null,
+  );
+  const advisory = buildPullRequestAdvisory(repo, syntheticPr, {
+    otherOpenPullRequests: pullRequests,
+    requireLinkedIssue,
+    linkedIssueAuthorLogins,
+  });
 
   // Pack-aware (#693): under `oss-anti-slop` the gate blocks ANY author, so drop the confirmed-contributor
   // gate entirely (mirrors gateCheckPolicy). `gittensor` keeps it. Pack comes from the PUBLIC .gittensory.yml.

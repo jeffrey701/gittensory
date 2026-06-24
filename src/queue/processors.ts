@@ -558,7 +558,13 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
   const duplicateWinnerEnabled = env.GITTENSORY_DUPLICATE_WINNER === "true";
   for (const pr of candidates) {
     const others = openPullRequests.filter((other) => other.number !== pr.number);
-    const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests: others, requireLinkedIssue, duplicateWinnerEnabled });
+    const linkedIssueAuthorLogins = await resolveLinkedIssueAuthorLogins(env, repoFullName, pr.linkedIssues);
+    const advisory = buildPullRequestAdvisory(repo, pr, {
+      otherOpenPullRequests: others,
+      requireLinkedIssue,
+      duplicateWinnerEnabled,
+      linkedIssueAuthorLogins,
+    });
     const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
@@ -3056,17 +3062,22 @@ async function authorizePrActionActor(args: {
 
 // #824 the common "load the PR's repo context + build its advisory" step every authorized action command runs
 // before its mutation. Identical across gate-override and the PR-panel retrigger.
-async function buildAuthorizedPrActionAdvisory(
+export async function buildAuthorizedPrActionAdvisory(
   env: Env,
   repoFullName: string,
   pr: PullRequestRecord,
   settings: RepositorySettings,
 ): Promise<{ repo: Awaited<ReturnType<typeof getRepository>>; advisory: ReturnType<typeof buildPullRequestAdvisory> }> {
-  const [repo, otherOpenPullRequests] = await Promise.all([getRepository(env, repoFullName), listOtherOpenPullRequests(env, repoFullName, pr.number)]);
+  const [repo, otherOpenPullRequests, linkedIssueAuthorLogins] = await Promise.all([
+    getRepository(env, repoFullName),
+    listOtherOpenPullRequests(env, repoFullName, pr.number),
+    resolveLinkedIssueAuthorLogins(env, repoFullName, pr.linkedIssues),
+  ]);
   const advisory = buildPullRequestAdvisory(repo, pr, {
     otherOpenPullRequests,
     requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
     duplicateWinnerEnabled: env.GITTENSORY_DUPLICATE_WINNER === "true",
+    linkedIssueAuthorLogins,
   });
   return { repo, advisory };
 }

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { gateCheckPolicy, resolveLinkedIssueAuthorLogins, shouldCollectLinkedIssueEvidence, shouldCollectSlopEvidence, shouldRunSlopAiAdvisory } from "../../src/queue/processors";
+import { buildAuthorizedPrActionAdvisory, gateCheckPolicy, resolveLinkedIssueAuthorLogins, shouldCollectLinkedIssueEvidence, shouldCollectSlopEvidence, shouldRunSlopAiAdvisory } from "../../src/queue/processors";
 import { createTestEnv } from "../helpers/d1";
 import { upsertIssueFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { evaluateGateCheck } from "../../src/rules/advisory";
 import { parseFocusManifest, resolveEffectiveSettings } from "../../src/signals/focus-manifest";
-import type { Advisory, RepositorySettings } from "../../src/types";
+import type { Advisory, PullRequestRecord, RepositorySettings } from "../../src/types";
 
 function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
   return {
@@ -399,5 +399,19 @@ describe("resolveLinkedIssueAuthorLogins", () => {
     const brokenEnv = { ...env, DB: null } as unknown as typeof env;
     const result = await resolveLinkedIssueAuthorLogins(brokenEnv, "owner/repo", [1]);
     expect(result).toEqual([null]);
+  });
+
+  it("threads linked issue authors into authorized PR action advisories", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 1);
+    await upsertIssueFromGitHub(env, "owner/repo", { number: 12, title: "Self-authored bug", body: "", state: "open", user: { login: "miner1" }, labels: [], html_url: "https://github.com/owner/repo/issues/12", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    const pr: PullRequestRecord = { repoFullName: "owner/repo", number: 99, title: "Fix self-authored bug", state: "open", authorLogin: "Miner1", body: "Closes #12", labels: [], linkedIssues: [12] };
+
+    const { advisory } = await buildAuthorizedPrActionAdvisory(env, "owner/repo", pr, settings({ selfAuthoredLinkedIssueGateMode: "block" }));
+    const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings({ selfAuthoredLinkedIssueGateMode: "block" }), null));
+
+    expect(advisory.findings.some((finding) => finding.code === "self_authored_linked_issue")).toBe(true);
+    expect(gate.conclusion).toBe("failure");
+    expect(gate.blockers.some((finding) => finding.code === "self_authored_linked_issue")).toBe(true);
   });
 });
