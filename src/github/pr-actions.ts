@@ -127,6 +127,7 @@ export async function getLastCloserLogin(env: Env, installationId: number, repoF
     const firstResponse = await requestPage(1);
     const firstEvents = firstResponse.data as Array<{ event?: string; actor?: { login?: string | null } | null }>;
     const lastPage = issueEventsLastPage(firstResponse.headers.link);
+    if (lastPage === null) return scanIssueEventsWithoutLastPage(requestPage, firstEvents);
     if (lastPage <= 1) return latestCloserInPage(firstEvents) ?? null;
 
     // GitHub returns issue-events oldest-first. Use the Link header to inspect the newest bounded window instead
@@ -151,9 +152,28 @@ function latestCloserInPage(events: Array<{ event?: string; actor?: { login?: st
   return undefined;
 }
 
-function issueEventsLastPage(linkHeader: string | undefined): number {
+async function scanIssueEventsWithoutLastPage(
+  requestPage: (page: number) => Promise<{ data: unknown; headers: { link?: string | undefined } }>,
+  firstEvents: Array<{ event?: string; actor?: { login?: string | null } | null }>,
+): Promise<string | null> {
+  let latestCloser = latestCloserInPage(firstEvents);
+  for (let page = 2; page <= ISSUE_EVENTS_RECENT_PAGE_LIMIT + 1; page += 1) {
+    const response = await requestPage(page);
+    const closer = latestCloserInPage(response.data as Array<{ event?: string; actor?: { login?: string | null } | null }>);
+    if (closer !== undefined) latestCloser = closer;
+    if (!issueEventsHasNextPage(response.headers.link)) return latestCloser ?? null;
+  }
+  return latestCloser ?? null;
+}
+
+function issueEventsLastPage(linkHeader: string | undefined): number | null {
   if (!linkHeader) return 1;
   const lastLink = linkHeader.split(",").find((link) => /rel="last"/.test(link));
   const page = lastLink?.match(/[?&]page=(\d+)/)?.[1];
-  return page ? Number(page) : 1;
+  if (page) return Number(page);
+  return issueEventsHasNextPage(linkHeader) ? null : 1;
+}
+
+function issueEventsHasNextPage(linkHeader: string | undefined): boolean {
+  return Boolean(linkHeader?.split(",").some((link) => /rel="next"/.test(link)));
 }

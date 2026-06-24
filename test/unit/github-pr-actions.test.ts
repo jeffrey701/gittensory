@@ -187,20 +187,43 @@ describe("GitHub PR action primitives (#778)", () => {
     await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 22)).resolves.toBe("page1-closer");
   });
 
-  it("treats a link header without rel=last as a single-page result (issueEventsLastPage FALSE branch)", async () => {
-    // Link header present but only contains rel="next" — no rel="last" match → lastPage stays 1
-    // → firstEvents from page 1 is returned directly without a second request.
+  it("continues past page 1 when rel=next is present without rel=last (regression)", async () => {
+    const fetchedPages: number[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "t" });
       if (url.includes("/issues/23/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        fetchedPages.push(page);
+        if (page === 1) {
+          return Response.json([{ event: "closed", actor: { login: "stale-contributor" } }], {
+            headers: { link: '<https://api.github.test/issues/23/events?per_page=100&page=2>; rel="next"' },
+          });
+        }
+        return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 23)).resolves.toBe("maintainer");
+    expect(fetchedPages).toEqual([1, 2]);
+  });
+
+  it("treats a link header without next or last as a single-page result", async () => {
+    const fetchedPages: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/25/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        fetchedPages.push(page);
         return Response.json([{ event: "closed", actor: { login: "solo-closer" } }], {
-          headers: { link: '<https://api.github.test/issues/23/events?per_page=100&page=2>; rel="next"' },
+          headers: { link: '<https://api.github.test/issues/25/events?per_page=100&page=1>; rel="prev"' },
         });
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 23)).resolves.toBe("solo-closer");
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 25)).resolves.toBe("solo-closer");
+    expect(fetchedPages).toEqual([1]);
   });
 
   it("returns null when bounded window (firstPageToRead=2) AND page 1 also have no close event (?? null right branch)", async () => {
