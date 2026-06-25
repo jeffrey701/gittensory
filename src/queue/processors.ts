@@ -180,6 +180,7 @@ import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import { runGittensoryAiReview } from "../services/ai-review";
 import { evaluatePreMergeChecks } from "../review/pre-merge-checks";
 import { secretLeakFinding } from "../review/safety";
+import { buildIssuePlanComment, classifyPlanCommandRequest, generateIssuePlan, isPlanCommand, isPlannerEnabled } from "../review/planner";
 import { aiCiRefutationActive, buildReviewGroundingText, checkSummaryText as checkFailureSummaryText, isGroundingEnabled } from "../review/grounding-wire";
 import { buildReviewRagContext, isRagEnabled } from "../review/rag-wire";
 import { evaluateWithSurfaceLane } from "../review/content-lane-wire";
@@ -1596,6 +1597,19 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
     }
 
     if (eventName === "issue_comment" && (await maybeProcessGateOverrideCommand(env, deliveryId, payload))) {
+      await recordWebhookEvent(env, {
+        deliveryId,
+        eventName,
+        action: payload.action,
+        installationId: payload.installation?.id,
+        repositoryFullName: payload.repository?.full_name,
+        payloadHash: "processed",
+        status: "processed",
+      });
+      return;
+    }
+
+    if (eventName === "issue_comment" && (await maybeProcessPlanCommand(env, deliveryId, payload))) {
       await recordWebhookEvent(env, {
         deliveryId,
         eventName,
@@ -3144,6 +3158,61 @@ async function recordGateOverrideSkip(
     outcome: "skipped",
     metadata: { reason },
   });
+}
+
+/**
+ * `@gittensory plan` (#issue-coding-plan, flag-gated by GITTENSORY_REVIEW_PLANNER). On a MAINTAINER's comment on
+ * an ISSUE (not a PR), generate a concise implementation plan from the issue text via Workers AI and post it as an
+ * issue comment so a contributor has a concrete starting point. Flag-OFF (default) returns false immediately
+ * (BEFORE any parse), so `@gittensory plan` falls through to the existing mention path → byte-identical. Returns
+ * true once it owns the event (so the caller records it processed and stops). Fail-safe: a model/post error is
+ * recorded as a skip and never throws into the webhook loop.
+ */
+async function maybeProcessPlanCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  if (!isPlannerEnabled(env)) return false; // flag-OFF → not handled here; the worker is byte-identical to today
+  if (!isPlanCommand(payload.comment?.body)) return false;
+  // All eligibility guards live in the PURE classifier (exhaustively unit-tested); here we carry one ok branch.
+  const req = classifyPlanCommandRequest(payload, getInstallationId(payload));
+  if (!req.ok) {
+    await recordPlanSkip(env, deliveryId, req.repoFullName, req.targetKey, req.actor, req.reason);
+    return true;
+  }
+  const targetKey = `${req.repoFullName}#${req.issue.number}`;
+  // Issue-level authorization: planning spends Workers AI + posts publicly, so restrict it to maintainers
+  // (the REAL repo permission, not the comment's spoofable author_association).
+  const association = await resolveRealRepoPermissionAssociation(env, req.installationId, req.repoFullName, req.actor);
+  if (!isMaintainerAssociation(association)) {
+    await recordPlanSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "actor_not_maintainer");
+    return true;
+  }
+  const plan = await generateIssuePlan(env, { title: req.issue.title, body: req.issue.body });
+  if (!plan) {
+    await recordPlanSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "no_plan_generated");
+    return true;
+  }
+  await createIssueComment(env, req.installationId, req.repoFullName, req.issue.number, buildIssuePlanComment(plan, { actor: req.actor, repoFullName: req.repoFullName, issueNumber: req.issue.number }));
+  await recordAuditEvent(env, {
+    eventType: "github_app.issue_plan_generated",
+    actor: req.actor,
+    targetKey,
+    outcome: "completed",
+    detail: `Implementation plan posted for ${targetKey}.`,
+    metadata: { deliveryId, repoFullName: req.repoFullName },
+  });
+  await recordGithubProductUsage(env, "issue_plan_generated", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: {} });
+  return true;
+}
+
+async function recordPlanSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
+  await recordAuditEvent(env, {
+    eventType: "github_app.issue_plan_skipped",
+    actor,
+    targetKey,
+    outcome: "completed",
+    detail: reason,
+    metadata: { deliveryId, repoFullName, reason },
+  });
+  await recordGithubProductUsage(env, "issue_plan_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
 }
 
 async function maybeProcessPrPanelRetrigger(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {

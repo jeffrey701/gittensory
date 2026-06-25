@@ -163,6 +163,11 @@ declare global {
      *  recording are wired, reading a promoted override into the live gate is a noted follow-up that must not
      *  risk loosening the gate. See src/review/selftune-wire.ts. */
     GITTENSORY_REVIEW_SELFTUNE?: string;
+    /** Convergence (#issue-coding-plan): the `@gittensory plan` command. Default OFF — `@gittensory plan` falls
+     *  through to the existing mention path, so the worker is byte-identical to today. When truthy, a MAINTAINER
+     *  comment of `@gittensory plan` on an issue generates an implementation plan from the issue text via Workers
+     *  AI and posts it as an issue comment. See src/review/planner.ts. */
+    GITTENSORY_REVIEW_PLANNER?: string;
     /** Proof of Power (#1059): when truthy, the unauthenticated `GET /v1/public/stats` endpoint serves the public
      *  homepage counter — computed LIVE from gittensory's OWN review ledger (review_targets + review_audit) behind
      *  a 60s cache, so it stays current as new reviews land. Default OFF — unset/false 404s the endpoint, so the
