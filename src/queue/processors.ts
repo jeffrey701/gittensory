@@ -3111,17 +3111,20 @@ async function recordGithubProductUsage(
   }).catch(() => undefined);
 }
 
+export type OverrideHeadResolution = { headSha: string | null | undefined; stale: boolean; liveHeadSha?: string | undefined };
+
 /**
- * Resolve the head SHA a `gate-override` should neutralize (#16 / audit). The stored `pr.headSha` lags GitHub
- * when a commit lands between the override comment and its processing, so re-fetch the LIVE head and override
- * THAT commit (the neutral check-run is per-commit by design). FAIL-OPEN: an unreadable live fetch returns the
- * cached head, so a transient GitHub hiccup never strands the override — it just targets the stored SHA as before.
- * Mirrors the rebase path's live re-fetch (prReadyForReview) and the dup-winner live reconcile.
+ * Resolve the head SHA a `gate-override` should neutralize (#16 / audit). The override is a maintainer approval
+ * for the cached PR head that existed when the command was queued; if GitHub now reports a different live head,
+ * treat the command as stale instead of neutralizing code the maintainer did not approve. FAIL-OPEN only when the
+ * live fetch is unreadable/omits head.sha, which preserves the old cached-SHA behavior without bypassing a newer
+ * live commit.
  */
-export async function resolveOverrideHeadSha(env: Env, installationId: number, repoFullName: string, pr: PullRequestRecord): Promise<string | null | undefined> {
+export async function resolveOverrideHeadSha(env: Env, installationId: number, repoFullName: string, pr: PullRequestRecord): Promise<OverrideHeadResolution> {
   const token = (await createInstallationToken(env, installationId).catch(() => undefined)) ?? env.GITHUB_PUBLIC_TOKEN;
   const liveHeadSha = await fetchLivePullRequestHeadSha(env, repoFullName, pr.number, token);
-  return liveHeadSha ?? pr.headSha;
+  if (liveHeadSha && pr.headSha && liveHeadSha !== pr.headSha) return { headSha: pr.headSha, stale: true, liveHeadSha };
+  return { headSha: pr.headSha, stale: false, liveHeadSha };
 }
 
 /**
@@ -3189,13 +3192,13 @@ async function maybeProcessGateOverrideCommand(env: Env, deliveryId: string, pay
     return true;
   }
 
-  // #16 (audit): the cached pr.headSha can be stale if a commit landed between the comment and this processing.
-  // The override is a per-commit neutral check-run, so posting it on the cached SHA is a silent no-op on the LIVE
-  // head (whose Gate check stays blocking). Re-fetch the live head and override THAT commit (fail-open to the
-  // cached head), then thread it through the advisory so the check-run + audit target the right SHA.
-  const headForOverride = await resolveOverrideHeadSha(env, installationId, repoFullName, pr);
-  const prAtLiveHead = headForOverride === pr.headSha ? pr : { ...pr, headSha: headForOverride };
-  const { advisory } = await buildAuthorizedPrActionAdvisory(env, repoFullName, prAtLiveHead, settings);
+  const headResolution = await resolveOverrideHeadSha(env, installationId, repoFullName, pr);
+  if (headResolution.stale) {
+    await recordGateOverrideSkip(env, deliveryId, repoFullName, `${repoFullName}#${pr.number}`, actor, "stale_pr_head");
+    return true;
+  }
+  const prAtResolvedHead = headResolution.headSha === pr.headSha ? pr : { ...pr, headSha: headResolution.headSha };
+  const { advisory } = await buildAuthorizedPrActionAdvisory(env, repoFullName, prAtResolvedHead, settings);
   const safeReason = sanitizePublicComment((command.reason ?? "").trim() || "No reason provided.");
   await createOrUpdateOverriddenGateCheckRun(env, installationId, repoFullName, advisory, { actor, reason: safeReason });
   await recordAuditEvent(env, {

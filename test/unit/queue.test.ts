@@ -6214,7 +6214,7 @@ describe("queue processors", () => {
     expect(overrideAdvisory ?? null).toBeNull();
   });
 
-  it("overrides the LIVE head, not the stale cached SHA, when a commit landed after the command (#16)", async () => {
+  it("skips a stale gate-override when a commit landed after the command (#16)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertRepositorySettings(env, {
@@ -6277,16 +6277,16 @@ describe("queue processors", () => {
       },
     });
 
-    // The neutral PATCH targeted the LIVE head's Gate run (id 556), and the stale SHA was never touched.
-    expect(seen.liveCheckGets).toBe(1);
+    // A maintainer's override is bound to the cached head they approved; a newer live head is not neutralized.
+    expect(seen.liveCheckGets).toBe(0);
     expect(seen.staleCheckGets).toBe(0);
-    expect(patchBodies[0]?.conclusion).toBe("neutral");
-    const audit = await env.DB.prepare("select metadata_json from audit_events where event_type = ?")
-      .bind("github_app.gate_overridden")
-      .first<{ metadata_json: string }>();
-    const metadata = JSON.parse(audit?.metadata_json ?? "{}") as { headSha?: string; cachedHeadSha?: string };
-    expect(metadata.headSha).toBe("live-sha");
-    expect(metadata.cachedHeadSha).toBe("stale-sha");
+    expect(patchBodies).toEqual([]);
+    const overridden = await env.DB.prepare("select id from audit_events where event_type = ?").bind("github_app.gate_overridden").first<{ id: number }>();
+    expect(overridden ?? null).toBeNull();
+    const skipped = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?")
+      .bind("github_app.gate_override_skipped")
+      .first<{ detail: string; metadata_json: string }>();
+    expect(skipped?.detail).toBe("stale_pr_head");
   });
 
   it("records null head SHAs in the override audit when the PR head is unresolved (#16 fail-safe)", async () => {

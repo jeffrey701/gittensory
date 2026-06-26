@@ -31,32 +31,32 @@ describe("resolveOverrideHeadSha (#16 / gate-override stale head)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns the LIVE head when the token mint succeeds (overrides the current commit, not the cached one)", async () => {
+  it("keeps the cached head when the live head matches", async () => {
     const env = createTestEnv();
     mockedToken.mockResolvedValue("inst-tok");
-    stubLiveHead("live-sha");
-    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("stale-sha"))).toBe("live-sha");
+    stubLiveHead("cached-sha");
+    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("cached-sha"))).toEqual({ headSha: "cached-sha", stale: false, liveHeadSha: "cached-sha" });
     expect(mockedToken).toHaveBeenCalledWith(env, 123);
   });
 
-  it("falls back to the public token when the mint throws, and still resolves the live head", async () => {
+  it("marks the command stale when the live head differs from the cached head", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-tok" });
     mockedToken.mockRejectedValue(new Error("no app key"));
     stubLiveHead("live-sha");
-    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("stale-sha"))).toBe("live-sha");
+    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("stale-sha"))).toEqual({ headSha: "stale-sha", stale: true, liveHeadSha: "live-sha" });
   });
 
   it("fails OPEN to the cached head when the live fetch is unreadable", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-tok" });
     mockedToken.mockResolvedValue("inst-tok");
     vi.stubGlobal("fetch", async () => new Response("nope", { status: 500 }));
-    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("stale-sha"))).toBe("stale-sha");
+    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("stale-sha"))).toEqual({ headSha: "stale-sha", stale: false, liveHeadSha: undefined });
   });
 
   it("returns the cached head when the live payload omits head.sha (fail-open)", async () => {
     const env = createTestEnv();
     mockedToken.mockResolvedValue("inst-tok");
     stubLiveHead(null);
-    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("stale-sha"))).toBe("stale-sha");
+    expect(await resolveOverrideHeadSha(env, 123, "owner/repo", makePr("stale-sha"))).toEqual({ headSha: "stale-sha", stale: false, liveHeadSha: undefined });
   });
 });
