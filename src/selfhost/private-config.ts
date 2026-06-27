@@ -84,15 +84,16 @@ export function makeLocalManifestReader(dir: string | undefined): RepoFocusManif
   };
 }
 
-/** Per-repo review-context candidate FOLDERS (relative to GITTENSORY_REPO_CONFIG_DIR): `{owner}__{repo}/review` then
- *  `{repo}/review`. Same owner/repo validation as localConfigCandidates; an invalid full name yields none. (#review-skills) */
+/** Per-repo review-context candidate FOLDERS (relative to GITTENSORY_REPO_CONFIG_DIR): only
+ *  `{owner}__{repo}/review`. Review prompt material is private and must stay owner-scoped; an invalid full name
+ *  yields none. (#review-skills) */
 function reviewContextFolders(repoFullName: string): string[] {
   const slash = repoFullName.indexOf("/");
   if (slash <= 0 || slash === repoFullName.length - 1 || slash !== repoFullName.lastIndexOf("/")) return [];
   const owner = repoFullName.slice(0, slash).toLowerCase();
   const repo = repoFullName.slice(slash + 1).toLowerCase();
   if (!GITHUB_OWNER_SEGMENT.test(owner) || !isSafeRepoSegment(repo)) return [];
-  return [join(`${owner}__${repo}`, "review"), join(repo, "review")];
+  return [join(`${owner}__${repo}`, "review")];
 }
 
 /** Parse a skill markdown file into {name, when, body}. YAML frontmatter (`---\nname:\nwhen:\n---`) is optional; name
@@ -108,7 +109,7 @@ export function parseReviewSkill(filename: string, text: string): RepoReviewSkil
 }
 
 /** Build the container-local review-context reader over GITTENSORY_REPO_CONFIG_DIR, or null when the dir is unset. Per
- *  repo (first existing folder wins) reads `review/CLAUDE.md` (the guide) + every `review/skills/*.md` (rubric modules,
+ *  repo reads owner-qualified `review/CLAUDE.md` (the guide) + every `review/skills/*.md` (rubric modules,
  *  sorted). Missing files/dir degrade to nulls/empty; a per-file read error skips that file. (#review-skills) */
 export function makeLocalReviewContextReader(dir: string | undefined): RepoReviewContextReader | null {
   const trimmed = (dir ?? "").trim();

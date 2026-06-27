@@ -138,12 +138,17 @@ describe("makeLocalReviewContextReader (#review-skills)", () => {
     expect(ctx.skills.map((s) => s.name)).toEqual(["a-first", "second"]); // sorted by filename; .txt ignored
   });
 
-  it("falls back to the bare repo-name folder; returns empty for a missing or invalid repo", async () => {
+  it("ignores bare repo-name review folders to keep private prompt material owner-scoped", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-review-"));
     mkdirSync(join(dir, "metagraphed", "review"), { recursive: true });
     writeFileSync(join(dir, "metagraphed", "review", "CLAUDE.md"), "Bare-folder guide.\n");
     const reader = makeLocalReviewContextReader(dir)!;
-    expect((await reader("JSONbored/metagraphed")).guide).toContain("Bare-folder guide.");
+    expect(await reader("JSONbored/metagraphed")).toEqual({ guide: null, skills: [] });
+  });
+
+  it("returns empty for a missing or invalid repo", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-review-"));
+    const reader = makeLocalReviewContextReader(dir)!;
     expect(await reader("JSONbored/unknown-repo")).toEqual({ guide: null, skills: [] }); // no folder
     expect(await reader("owner/..")).toEqual({ guide: null, skills: [] }); // invalid repo segment → no candidates
     expect(await reader("noslash")).toEqual({ guide: null, skills: [] }); // invalid full name (no slash)
