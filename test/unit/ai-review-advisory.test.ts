@@ -156,6 +156,15 @@ describe("runAiReviewForAdvisory", () => {
     expect(usage?.model).toBe("claude-code:claude-sonnet-4-6");
   });
 
+  it("records explicit self-host reviewer labels when models are omitted or providers are unknown", async () => {
+    const env = aiEnv(async () => { throw new Error("codex unavailable"); });
+    (env as unknown as { AI_PROVIDER: string }).AI_PROVIDER = " CODEX , unknown-provider ";
+    const result = await runAiReviewForAdvisory(env, { settings: { aiReviewMode: "advisory" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", pr, author: "alice", confirmedContributor: true });
+    expect(result).toBeUndefined();
+    const usage = await env.DB.prepare("SELECT model FROM ai_usage_events WHERE feature = 'ai_review_pr' ORDER BY created_at DESC LIMIT 1").first<{ model: string }>();
+    expect(usage?.model).toBe("codex+unknown-provider");
+  });
+
   it("no-ops for a non-confirmed contributor under the gittensor pack and when there is no head SHA", async () => {
     const env = aiEnv(async () => ({ response: defectJson() }));
     const base = { settings: { aiReviewMode: "block", gatePack: "gittensor" } as RepositorySettings, repoFullName: "acme/widgets", pr, author: "alice" };

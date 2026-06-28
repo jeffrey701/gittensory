@@ -300,6 +300,7 @@ describe("branch coverage — defaults + edge inputs", () => {
       extractCliUsage(
         [
           JSON.stringify({ usage: { input_tokens: 10, outputTokens: "5", total_tokens: 15 }, model: "gpt-5" }),
+          "",
           JSON.stringify({ tokenUsage: { prompt_tokens: 12, completion_tokens: 6, totalTokens: 18 }, total_cost_usd: "0.07" }),
           JSON.stringify({ usage_metadata: { costUsd: 0.09 } }),
         ].join("\n"),
@@ -348,6 +349,7 @@ describe("branch coverage — defaults + edge inputs", () => {
   it("buildProvider uses provider-specific default base URLs when provider base URLs are unset", () => {
     expect(typeof buildProvider("openai", {})?.run).toBe("function"); // defaults to https://api.openai.com/v1
     expect(typeof buildProvider("ollama", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
+    expect(typeof buildProvider("openai-compatible", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
   });
   it("extractCliText reads content + response fields", () => {
     expect(extractCliText(JSON.stringify({ content: "c" }))).toBe("c");
@@ -365,6 +367,7 @@ describe("branch coverage — defaults + edge inputs", () => {
       },
     };
     await expect(createChainAi([p]).run("m", { prompt: "x" })).rejects.toThrow(/all_ai_providers_failed/);
+    await expect(createChainAi([p]).run("", { prompt: "x" })).rejects.toThrow(/all_ai_providers_failed/);
   });
 });
 
@@ -495,6 +498,20 @@ describe("subscription CLI helpers + fail-safe", () => {
     process.env.PATH = `${dir}:${origPath ?? ""}`;
     try {
       const out = await createClaudeCodeAi({ ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "t" }).run("sonnet", { prompt: "hello" });
+      expect(out.response).toBe("OK:hello");
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+
+  it("drives the REAL subprocess (defaultSpawn) against a fake `codex` on PATH", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fakecli-"));
+    const fake = join(dir, "codex");
+    writeFileSync(fake, "#!/usr/bin/env node\nlet i='';process.stdin.on('data',d=>i+=d);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({type:'result',result:'OK:'+i.trim()})));\n");
+    chmodSync(fake, 0o755);
+    const origPath = process.env.PATH;
+    try {
+      const out = await createCodexAi({ PATH: `${dir}:${origPath ?? ""}`, HOME: dir, GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }).run("", { prompt: "hello" });
       expect(out.response).toBe("OK:hello");
     } finally {
       process.env.PATH = origPath;

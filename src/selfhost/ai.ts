@@ -437,8 +437,8 @@ function logSelfHostAiProviderFailed(input: {
       event: "selfhost_ai_provider_failed",
       provider: input.provider,
       model: input.model || "default",
-      ...(input.effort ? { effort: input.effort } : {}),
-      ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+      effort: input.effort,
+      timeoutMs: input.timeoutMs,
       error: errorMessage(input.error, input.knownSecrets),
     }),
   );
