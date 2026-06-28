@@ -130,10 +130,16 @@ const SUMMARY_SKIP_KEYS = new Set([
 function summarizeLogFields(obj: Record<string, unknown>): string {
   return Object.entries(obj)
     .filter(([k, v]) => !SUMMARY_SKIP_KEYS.has(k) && v !== null)
-    .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+    .map(([k, v]) => `${k}=${summarizeLogFieldValue(k, v)}`)
     .filter((part) => part.length <= 90) // a long blob (id/body) belongs in the context, not the title
     .slice(0, 5) // a few salient fields, not a dump
     .join(", ");
+}
+
+function summarizeLogFieldValue(key: string, value: unknown): string {
+  if (SECRET_KEY.test(key)) return "[redacted]";
+  if (typeof value !== "object") return String(value);
+  return JSON.stringify(scrubEvent({ extra: structuredClone(value) }).extra);
 }
 
 /** Forward a structured console line to Sentry when it is an ERROR-level log. The engine logs operational

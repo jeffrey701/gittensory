@@ -299,6 +299,25 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
       "project=JSONbored/gittensory, closePrecision=0.6, floor=0.8",
     );
   });
+
+  it("redacts secret-keyed values in field-only error summaries (regression)", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "field_only_secret",
+        apiKey: "sensitive-value",
+        password: "sensitive-value",
+        project: "demo",
+        details: { authToken: "nested-sensitive", count: 2 },
+      }),
+    );
+
+    expect(lastCapturedError().name).toBe("field_only_secret");
+    expect(lastCapturedError().message).toBe(
+      'apiKey=[redacted], password=[redacted], project=demo, details={"authToken":"[redacted]","count":2}',
+    );
+  });
 });
 
 describe("installStructuredLogForwarding — central console sink instrumentation (#1468)", () => {
