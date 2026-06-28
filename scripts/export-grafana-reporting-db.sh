@@ -54,8 +54,7 @@ if [ ! -s "$APP_DB" ]; then
 fi
 
 if sqlite3 "$APP_DB" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_targets' LIMIT 1" | grep -q 1; then
-  sqlite3 "$APP_DB" <<SQL
-.timeout 5000
+  sqlite3 -cmd ".timeout 5000" "$APP_DB" "
 ATTACH '$TMP_DB_SQL' AS report;
 INSERT INTO report.review_targets (
   repo,
@@ -79,12 +78,11 @@ SELECT
 FROM main.review_targets
 WHERE kind = 'pull_request';
 DETACH report;
-SQL
+"
 fi
 
 if sqlite3 "$APP_DB" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_usage_events' LIMIT 1" | grep -q 1; then
-  sqlite3 "$APP_DB" <<SQL
-.timeout 5000
+  sqlite3 -cmd ".timeout 5000" "$APP_DB" "
 ATTACH '$TMP_DB_SQL' AS report;
 INSERT INTO report.ai_usage_events (
   feature,
@@ -109,7 +107,7 @@ SELECT
 FROM main.ai_usage_events
 WHERE feature = 'ai_review_pr';
 DETACH report;
-SQL
+"
 fi
 
 sqlite3 "$TMP_DB" "PRAGMA quick_check;" | grep -qx "ok"

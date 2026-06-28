@@ -323,10 +323,18 @@ services:
       GITTENSORY_REPORTING_SOURCE_DB: "${GITTENSORY_REPORTING_SOURCE_DB:-/appdb/gittensory.sqlite}"
       GITTENSORY_REPORTING_DIR: /reporting
       GITTENSORY_REPORTING_DB: "${GITTENSORY_REPORTING_DB:-/reporting/gittensory-reporting.sqlite}"
+      GRAFANA_REPORTING_EXPORT_INTERVAL_SECONDS: "${GRAFANA_REPORTING_EXPORT_INTERVAL_SECONDS:-30}"
     command:
       - /bin/sh
       - -c
-      - "apk add --no-cache sqlite >/dev/null 2>&1 && while true; do sh /export-grafana-reporting-db.sh || echo '[reporting] export failed'; sleep ${GRAFANA_REPORTING_EXPORT_INTERVAL_SECONDS:-30}; done"
+      - >-
+        apk add --no-cache sqlite >/dev/null 2>&1 &&
+        while true; do
+          sh /export-grafana-reporting-db.sh || echo '[reporting] export failed';
+          interval="$${GRAFANA_REPORTING_EXPORT_INTERVAL_SECONDS:-30}";
+          case "$$interval" in ''|*[!0-9]*) interval=30;; esac;
+          sleep "$$interval";
+        done
     healthcheck:
       test:
         [
