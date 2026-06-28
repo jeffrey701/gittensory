@@ -834,7 +834,7 @@ describe("GitHub check runs", () => {
         if (url.includes("/commits/pending-existing/check-runs")) {
           return Response.json({
             total_count: 1,
-            check_runs: [{ id: 333, name: "Gittensory Gate" }],
+            check_runs: [{ id: 333, name: "Gittensory Gate", status: "in_progress" }],
           });
         }
         if (url.includes("/check-runs/333")) {
@@ -861,6 +861,64 @@ describe("GitHub check runs", () => {
       html_url: "https://github.com/checks/333",
     });
     expect(capturedBody.status).toBe("in_progress");
+    expect(capturedBody).not.toHaveProperty("conclusion");
+  });
+
+  it("posts a fresh pending Gate check instead of patching a completed run", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const calls: string[] = [];
+    let capturedBody: { status?: string; conclusion?: string; output?: { title?: string } } = {};
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push(`${method} ${url}`);
+        if (url.includes("/access_tokens"))
+          return Response.json({ token: "installation-token" });
+        if (url.includes("/commits/pending-after-failure/check-runs")) {
+          return Response.json({
+            total_count: 1,
+            check_runs: [
+              {
+                id: 444,
+                name: "Gittensory Gate",
+                status: "completed",
+                conclusion: "failure",
+              },
+            ],
+          });
+        }
+        if (url.includes("/check-runs/444"))
+          throw new Error("must not patch completed Gate run");
+        if (url.includes("/check-runs") && method === "POST") {
+          capturedBody = JSON.parse(String(init?.body)) as typeof capturedBody;
+          return Response.json({
+            id: 445,
+            html_url: "https://github.com/checks/445",
+          }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+
+    const result = await createOrUpdatePendingGateCheckRun(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+      123,
+      "JSONbored/gittensory",
+      gateAdvisory("pending-after-failure"),
+    );
+
+    expect(result).toMatchObject({
+      kind: "published",
+      id: 445,
+      html_url: "https://github.com/checks/445",
+    });
+    expect(calls.some((call) => call.includes("/check-runs/444"))).toBe(false);
+    expect(capturedBody).toMatchObject({
+      status: "in_progress",
+      output: { title: "Gittensory Gate is evaluating" },
+    });
     expect(capturedBody).not.toHaveProperty("conclusion");
   });
 

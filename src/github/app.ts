@@ -29,6 +29,8 @@ type CheckRunListResponse = {
     id: number;
     html_url?: string;
     name?: string;
+    status?: GitHubCheckStatus | string | null;
+    conclusion?: string | null;
   }>;
 };
 
@@ -498,6 +500,7 @@ export async function createOrUpdatePendingGateCheckRun(
           "Gittensory is running deterministic public PR hygiene checks.",
         text: "The Gate blocks every author on the repo's configured hard blockers (duplicate PRs by default); on everything else, and while state is still syncing, it stays advisory.",
       },
+      updateExisting: "in_progress_only",
       mode,
     },
   );
@@ -612,6 +615,7 @@ async function createOrUpdateNamedCheckRun(
     conclusion?: GitHubCheckConclusion | undefined;
     output: CheckRunOutput;
     checkRunId?: number | undefined;
+    updateExisting?: "any" | "in_progress_only" | "never" | undefined;
     mode?: AgentActionMode | undefined;
   },
 ): Promise<CheckRunOutcome | null> {
@@ -685,7 +689,7 @@ async function createOrUpdateNamedCheckRun(
     if (check.checkRunId) {
       const out = await patchCheckRun(check.checkRunId);
       if (out) return out;
-    } else {
+    } else if (check.updateExisting !== "never") {
       const existing = await octokit.request(
         "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
         {
@@ -699,7 +703,11 @@ async function createOrUpdateNamedCheckRun(
       );
       const existingCheckRun = (existing.data as CheckRunListResponse)
         .check_runs?.[0];
-      if (existingCheckRun) {
+      if (
+        existingCheckRun &&
+        (check.updateExisting !== "in_progress_only" ||
+          (existingCheckRun.status ?? "").toLowerCase() !== "completed")
+      ) {
         const out = await patchCheckRun(existingCheckRun.id);
         if (out) return out;
       }
