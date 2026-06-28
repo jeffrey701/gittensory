@@ -10,6 +10,10 @@ sql_string() {
   printf "%s" "$1" | sed "s/'/''/g"
 }
 
+source_column_exists() {
+  sqlite3 "$APP_DB" "SELECT 1 FROM pragma_table_info('$1') WHERE name = '$2' LIMIT 1" | grep -q 1
+}
+
 mkdir -p "$OUT_DIR"
 
 rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
@@ -82,6 +86,11 @@ DETACH report;
 fi
 
 if sqlite3 "$APP_DB" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_usage_events' LIMIT 1" | grep -q 1; then
+  ESTIMATED_NEURONS_EXPR=0
+  if source_column_exists "ai_usage_events" "estimated_neurons"; then
+    ESTIMATED_NEURONS_EXPR="estimated_neurons"
+  fi
+
   sqlite3 -cmd ".timeout 5000" "$APP_DB" "
 ATTACH '$TMP_DB_SQL' AS report;
 INSERT INTO report.ai_usage_events (
@@ -97,7 +106,7 @@ SELECT
   feature,
   model,
   status,
-  estimated_neurons,
+  COALESCE($ESTIMATED_NEURONS_EXPR, 0),
   detail,
   json_object(
     'repoFullName', json_extract(metadata_json, '$.repoFullName'),
