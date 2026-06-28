@@ -248,12 +248,35 @@ describe("signal coverage edge cases", () => {
       [],
       [],
     );
+    const missingRepo = { ...directRepo, isRegistered: false, registryConfig: null };
+    const outsideUnknownLane = buildPreflightResult(
+      { repoFullName: missingRepo.fullName, title: "Fix cache invalidation", body: "Fixes #1", linkedIssues: [1], authorAssociation: "CONTRIBUTOR" },
+      missingRepo,
+      [issue(missingRepo.fullName, 1, "Cache invalidation")],
+      [],
+    );
+    const ownerUnknownLane = buildPreflightResult(
+      { repoFullName: missingRepo.fullName, title: "Fix cache invalidation", body: "Fixes #1", linkedIssues: [1], authorAssociation: "OWNER" },
+      missingRepo,
+      [issue(missingRepo.fullName, 1, "Cache invalidation")],
+      [],
+    );
 
     expect(cleanPacket.pullRequestPackets[0]).toMatchObject({ reviewPriority: "review", reasons: ["No obvious queue hygiene issue detected in cached metadata."] });
     expect(cleanPacket.suggestedActions).toEqual(["Queue looks manageable from cached Gittensory signals."]);
     expect(local.status).toBe("ready");
     expect(local.localDiff).toMatchObject({ codeFileCount: 1, testFileCount: 1, inferredLinkedIssues: [1] });
     expect(directNoIssue.findings.map((finding) => finding.code)).toContain("missing_linked_issue");
+    expect(outsideUnknownLane).toMatchObject({ status: "hold" });
+    expect(outsideUnknownLane.findings.find((finding) => finding.code === "lane_not_recommended")).toMatchObject({
+      severity: "warning",
+      action: "Refresh registry data or choose a registered active repo.",
+    });
+    expect(ownerUnknownLane).toMatchObject({ status: "ready" });
+    expect(ownerUnknownLane.findings.find((finding) => finding.code === "lane_not_recommended")).toMatchObject({
+      severity: "info",
+      action: "No action.",
+    });
   });
 
   it("covers issue quality, burden, bounties, noise, and reviewability edge decisions", () => {

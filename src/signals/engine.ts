@@ -2465,13 +2465,15 @@ export function buildPreflightResult(
     }),
   );
   const findings: SignalFinding[] = [];
-  if (lane.lane === "unknown" || lane.lane === "inactive") {
+  const laneUnavailable = lane.lane === "unknown" || lane.lane === "inactive";
+  const maintainerAuthored = isMaintainerAssociation(input.authorAssociation);
+  if (laneUnavailable) {
     findings.push({
       code: "lane_not_recommended",
-      severity: "warning",
-      title: "Repo lane is not ready for a confident recommendation",
-      detail: lane.summary,
-      action: "Refresh registry data or choose a registered active repo.",
+      severity: maintainerAuthored ? "info" : "warning",
+      title: maintainerAuthored ? "Repo lane unavailable for contributor scoring" : "Repo lane is not ready for a confident recommendation",
+      detail: maintainerAuthored ? `${lane.summary} Maintainer-authored work is treated as repo stewardship, not contributor-lane eligibility.` : lane.summary,
+      action: maintainerAuthored ? "No action." : "Refresh registry data or choose a registered active repo.",
     });
   }
   if (linkedIssues.length === 0 && lane.lane !== "issue_discovery") {
@@ -2534,7 +2536,7 @@ export function buildPreflightResult(
   return {
     repoFullName: input.repoFullName,
     generatedAt: nowIso(),
-    status: lane.lane === "unknown" || lane.lane === "inactive" ? "hold" : hasWarning ? "needs_work" : "ready",
+    status: laneUnavailable && !maintainerAuthored ? "hold" : hasWarning ? "needs_work" : "ready",
     lane,
     reviewBurden,
     linkedIssues,
