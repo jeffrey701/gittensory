@@ -83,6 +83,23 @@ jobs:
       - name: Build self-host bundle for release
         run: SELFHOST_SOURCEMAP=1 SELFHOST_BUNDLE_ALL=1 node scripts/build-selfhost.mjs --all --sourcemap
 
+      - name: Verify release source maps are in the image context
+        run: |
+          test -s dist/server.mjs
+          test -s dist/server.mjs.map
+          grep -Fq 'sourceMappingURL=server.mjs.map' dist/server.mjs
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const sourceMap = JSON.parse(readFileSync("dist/server.mjs.map", "utf8"));
+          if (sourceMap.sourceRoot !== "/app/dist") {
+            throw new Error(`Expected sourceRoot /app/dist, got ${sourceMap.sourceRoot ?? "<unset>"}`);
+          }
+          if (!Array.isArray(sourceMap.sources) || sourceMap.sources.length === 0) {
+            throw new Error("Expected release source map to include original sources");
+          }
+          NODE
+
       - name: Detect Sentry release token
         id: sentry
         env:
