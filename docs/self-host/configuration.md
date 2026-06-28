@@ -86,6 +86,7 @@ See [ai-providers.md](./ai-providers.md) for the full provider/model/effort/time
 | `CLAUDE_CODE_OAUTH_TOKEN`                    | Claude Code subscription token (`claude setup-token`)                                 |
 | `AI_EMBED_BASE_URL` / `_MODEL` / `_PROVIDER` | Dedicated RAG embed provider                                                          |
 | `GITTENSORY_REPO_CONFIG_DIR`                 | Container-private per-repo config dir                                                 |
+| `GITTENSORY_REPORTING_SOURCE_DB`             | Optional reporting-exporter source path for non-default SQLite `DATABASE_PATH`        |
 
 ## Sentry environment variables
 

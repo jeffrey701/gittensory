@@ -12,11 +12,6 @@ sql_string() {
 
 mkdir -p "$OUT_DIR"
 
-if [ ! -s "$APP_DB" ]; then
-  echo "reporting export skipped: source database missing at $APP_DB" >&2
-  exit 0
-fi
-
 rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
 TMP_DB_SQL="$(sql_string "$TMP_DB")"
 
@@ -49,6 +44,14 @@ CREATE TABLE ai_usage_events (
 CREATE INDEX ai_usage_events_feature_created_idx ON ai_usage_events(feature, created_at);
 CREATE INDEX ai_usage_events_model_created_idx ON ai_usage_events(model, created_at);
 SQL
+
+if [ ! -s "$APP_DB" ]; then
+  sqlite3 "$TMP_DB" "PRAGMA quick_check;" | grep -qx "ok"
+  mv "$TMP_DB" "$OUT_DB"
+  rm -f "$TMP_DB-wal" "$TMP_DB-shm"
+  echo "reporting export empty: source database missing at $APP_DB" >&2
+  exit 0
+fi
 
 if sqlite3 "$APP_DB" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_targets' LIMIT 1" | grep -q 1; then
   sqlite3 "$APP_DB" <<SQL

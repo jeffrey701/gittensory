@@ -253,7 +253,11 @@ content-lane are not yet per-repo toggleable and stay on the allowlist.)
 - **Maintainer Grafana dashboards.** Grafana does **not** mount the live app database. The observability profile
   starts `reporting-exporter`, which copies only the dashboard-safe `review_targets` and `ai_usage_events`
   columns into `/reporting/gittensory-reporting.sqlite` every `GRAFANA_REPORTING_EXPORT_INTERVAL_SECONDS` seconds
-  (default 30). The SQLite datasource points at that redacted reporting DB.
+  (default 30). The SQLite datasource points at that redacted reporting DB. If you override the app SQLite
+  `DATABASE_PATH`, set `GITTENSORY_REPORTING_SOURCE_DB` to the matching exporter mount path, for example
+  `/appdb/custom.sqlite` for `DATABASE_PATH=/data/custom.sqlite`. `DATABASE_URL`/Postgres deployments currently
+  export an empty dashboard-safe DB so Grafana can start; Postgres-backed maintainer analytics need a dedicated SQL
+  exporter.
 - **App-level metrics.** Enable `GITTENSORY_REVIEW_OPS=true` for the read-only gate-block anomaly scan and the
   bearer-gated `GET /v1/internal/ops/stats` aggregate.
 
