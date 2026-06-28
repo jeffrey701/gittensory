@@ -11,7 +11,10 @@ import {
   getInstallationId,
   getRepositoryCollaboratorPermission,
   isCacheableGithubUrl,
+  isCheckRunPermissionError,
   isForeignAppInstallation,
+  isRateLimitedResponse,
+  rateLimitRetryMs,
   setGitHubResponseCache,
   setInstallationTokenStore,
 } from "../../src/github/app";
@@ -1461,5 +1464,118 @@ describe("self-host Redis token store + GitHub GET response cache", () => {
     expect(store.has("https://api.github.com/app/installations/99")).toBe(
       false,
     ); // non-200 not cached
+  });
+});
+
+describe("GitHub rate-limit handling (#ratelimit-resilience)", () => {
+  describe("isRateLimitedResponse", () => {
+    it("is false for a 200 and for a non-rate 403 (real permission error)", async () => {
+      expect(await isRateLimitedResponse(new Response("ok", { status: 200 }))).toBe(false);
+      expect(
+        await isRateLimitedResponse(
+          new Response("Resource not accessible by integration", { status: 403 }),
+        ),
+      ).toBe(false);
+    });
+    it("detects a primary limit (x-ratelimit-remaining:0) and a Retry-After (secondary/429)", async () => {
+      expect(
+        await isRateLimitedResponse(
+          new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } }),
+        ),
+      ).toBe(true);
+      expect(
+        await isRateLimitedResponse(
+          new Response("", { status: 429, headers: { "retry-after": "1" } }),
+        ),
+      ).toBe(true);
+    });
+    it("detects a secondary limit from the body when headers are absent", async () => {
+      expect(
+        await isRateLimitedResponse(
+          new Response("You have exceeded a secondary rate limit", { status: 403 }),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("rateLimitRetryMs", () => {
+    it("honors a valid Retry-After (seconds), capped, including 0", () => {
+      expect(rateLimitRetryMs(new Response("", { headers: { "retry-after": "2" } }), 0)).toBe(2000);
+      expect(rateLimitRetryMs(new Response("", { headers: { "retry-after": "9999" } }), 0)).toBe(8000);
+      expect(rateLimitRetryMs(new Response("", { headers: { "retry-after": "0" } }), 0)).toBe(0);
+    });
+    it("falls back to exponential backoff when Retry-After is absent or invalid", () => {
+      expect(rateLimitRetryMs(new Response("", {}), 2)).toBe(2000); // 500 * 2^2, no header
+      expect(rateLimitRetryMs(new Response("", { headers: { "retry-after": "soon" } }), 0)).toBe(500); // invalid → 500 * 2^0
+    });
+  });
+
+  describe("isCheckRunPermissionError — a rate-limit 403 is NOT a permission gap", () => {
+    it("classifies a genuine permission error as permission_missing", () => {
+      expect(isCheckRunPermissionError({ status: 403, message: "nope" })).toBe(true);
+      expect(
+        isCheckRunPermissionError({ status: 404, message: "Resource not accessible by integration" }),
+      ).toBe(true);
+    });
+    it("does NOT classify a rate-limit 403/429 as permission_missing", () => {
+      expect(
+        isCheckRunPermissionError({ status: 403, response: { headers: { "retry-after": "30" } } }),
+      ).toBe(false);
+      expect(
+        isCheckRunPermissionError({ status: 403, response: { headers: { "x-ratelimit-remaining": "0" } } }),
+      ).toBe(false);
+      expect(
+        isCheckRunPermissionError({ status: 429, message: "You have exceeded a secondary rate limit" }),
+      ).toBe(false);
+    });
+    it("is false for a non-object and for a non-permission, non-rate error", () => {
+      expect(isCheckRunPermissionError(null)).toBe(false);
+      expect(isCheckRunPermissionError({ status: 500, message: "boom" })).toBe(false);
+    });
+  });
+
+  it("timeoutFetch retries a transient rate-limit, then succeeds (via the token mint)", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    clearInstallationTokenCacheForTest();
+    let calls = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        calls += 1;
+        if (calls === 1)
+          return new Response("secondary rate limit", {
+            status: 403,
+            headers: { "retry-after": "0" }, // 0 → instant retry (fast test)
+          });
+        return Response.json({
+          token: "tok-after-retry",
+          expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey });
+    expect(await createInstallationToken(env, 5151)).toBe("tok-after-retry");
+    expect(calls).toBe(2); // one rate-limited attempt + one success
+  });
+
+  it("timeoutFetch gives up after the retry budget so a sustained limit surfaces (→ queue retry)", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    clearInstallationTokenCacheForTest();
+    let calls = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        calls += 1;
+        return new Response("secondary rate limit", {
+          status: 403,
+          headers: { "retry-after": "0" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey });
+    await expect(createInstallationToken(env, 5252)).rejects.toThrow();
+    expect(calls).toBe(4); // initial + GITHUB_RATE_LIMIT_MAX_RETRIES (3)
   });
 });

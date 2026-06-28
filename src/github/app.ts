@@ -80,6 +80,48 @@ export function isCacheableGithubUrl(url: string): boolean {
   );
 }
 
+// Transient GitHub rate-limit handling (#ratelimit-resilience). A primary (x-ratelimit-remaining:0) or secondary
+// (Retry-After / "secondary rate limit" body) limit returns 403/429. Instead of surfacing it as a failure — or
+// MISCLASSIFYING a 403 as a permission gap — back off a few times and retry. A sustained limit exhausts the
+// retries and the response is returned so the caller (and the queue) handles it. Bounded so a review never stalls.
+const GITHUB_RATE_LIMIT_MAX_RETRIES = 3;
+const GITHUB_RATE_LIMIT_MAX_DELAY_MS = 8_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Does this GitHub response signal a rate limit (primary or secondary)? 403/429 with a Retry-After header, an
+ *  exhausted x-ratelimit-remaining, or a secondary-limit/abuse body. A 403 with NONE of these is a real
+ *  permission/other error and must surface — not retry, not be mistaken for a rate limit. Exported for tests. */
+export async function isRateLimitedResponse(
+  response: Response,
+): Promise<boolean> {
+  if (response.status !== 403 && response.status !== 429) return false;
+  if (response.headers.get("retry-after") != null) return true;
+  if (response.headers.get("x-ratelimit-remaining") === "0") return true;
+  try {
+    return /secondary rate limit|\babuse\b|api rate limit exceeded/i.test(
+      await response.clone().text(),
+    );
+    /* v8 ignore next 3 -- defensive: a cloned Response body that fails to read isn't reachable in practice */
+  } catch {
+    return false;
+  }
+}
+
+/** How long to wait before the next rate-limit retry: honor a valid Retry-After (seconds), else exponential
+ *  backoff — each capped so a review can never stall on one call. A sustained PRIMARY limit (reset up to an hour
+ *  out) simply exhausts the few inline retries and the queue retries the job later. Exported for tests. */
+export function rateLimitRetryMs(response: Response, attempt: number): number {
+  const retryAfterHeader = response.headers.get("retry-after");
+  if (retryAfterHeader != null) {
+    const retryAfter = Number(retryAfterHeader);
+    if (Number.isFinite(retryAfter) && retryAfter >= 0)
+      return Math.min(retryAfter * 1000, GITHUB_RATE_LIMIT_MAX_DELAY_MS);
+  }
+  return Math.min(500 * 2 ** attempt, GITHUB_RATE_LIMIT_MAX_DELAY_MS);
+}
+
 async function timeoutFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -96,12 +138,22 @@ async function timeoutFetch(
         headers: { "content-type": hit.contentType },
       });
   }
-  const response = init?.signal
-    ? await fetch(input, init)
-    : await fetch(input, {
-        ...(init ?? {}),
-        signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
-      });
+  let response: Response;
+  for (let attempt = 0; ; attempt += 1) {
+    response = init?.signal
+      ? await fetch(input, init)
+      : await fetch(input, {
+          ...(init ?? {}),
+          signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
+        });
+    // Retry a transient rate-limit (with backoff) instead of surfacing it; stop once exhausted or it's not a limit.
+    if (
+      attempt >= GITHUB_RATE_LIMIT_MAX_RETRIES ||
+      !(await isRateLimitedResponse(response))
+    )
+      break;
+    await sleep(rateLimitRetryMs(response, attempt));
+  }
   if (useCache && response.status === 200) {
     try {
       const body = await response.clone().text(); // clone leaves the returned response readable
@@ -647,10 +699,36 @@ function publishedOutcome(data: CheckRunResponse): CheckRunOutcome {
   return outcome;
 }
 
-function isCheckRunPermissionError(error: unknown): boolean {
+/** Mirror of {@link isRateLimitedResponse} for a THROWN Octokit error (has .status, .message, .response.headers).
+ *  A rate-limit 403/429 is not a permission gap — used to keep it out of isCheckRunPermissionError. */
+function isRateLimitedError(error: {
+  status?: number;
+  message?: string;
+  response?: { headers?: Record<string, unknown> };
+}): boolean {
+  if (error.status !== 403 && error.status !== 429) return false;
+  const headers = error.response?.headers ?? {};
+  if (headers["retry-after"] != null) return true;
+  if (headers["x-ratelimit-remaining"] === "0") return true;
+  return (
+    typeof error.message === "string" &&
+    /secondary rate limit|\babuse\b|api rate limit exceeded/i.test(error.message)
+  );
+}
+
+/** Exported for tests. */
+export function isCheckRunPermissionError(error: unknown): boolean {
   /* v8 ignore next -- Octokit wraps thrown fetch values in HttpError objects before this helper sees them. */
   if (typeof error !== "object" || error === null) return false;
-  const e = error as { status?: number; message?: string };
+  const e = error as {
+    status?: number;
+    message?: string;
+    response?: { headers?: Record<string, unknown> };
+  };
+  // A rate-limit / secondary-limit 403 is NOT a permission gap — never record it as one (the App has Checks:write;
+  // a 403 under burst load is the abuse limit). timeoutFetch already retries these inline; an EXHAUSTED one surfaces
+  // here and must PROPAGATE (→ queue retry), not be swallowed as a permanent permission_missing. (#ratelimit-resilience)
+  if (isRateLimitedError(e)) return false;
   if (e.status === 403) return true;
   return (
     typeof e.message === "string" &&
