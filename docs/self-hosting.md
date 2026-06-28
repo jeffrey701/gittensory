@@ -55,7 +55,8 @@ node --import ./scripts/register-selfhost.mjs dist/server.mjs
 
 Releases are cut by pushing a `selfhost-v<semver>` tag (e.g. `selfhost-v0.1.0`): CI builds the multi-arch
 image, pushes it to GHCR with `:<version>`, `:latest`, and `:sha-…` tags (with provenance + SBOM), and opens a
-GitHub Release.
+GitHub Release. Official release images also bake `GITTENSORY_VERSION=gittensory-selfhost@<version>` so Sentry
+events can be matched to the release/source maps uploaded by the release workflow.
 
 ---
 
@@ -239,6 +240,11 @@ content-lane are not yet per-repo toggleable and stay on the allowlist.)
   in-flight job, checkpoints the WAL, and closes the DB before exiting.
 - **Logs** are structured JSON (`selfhost_listening`, `selfhost_migrations_applied`, `selfhost_ai_provider`,
   `selfhost_queue_recovered`, `selfhost_job_dead`, `selfhost_cron_error`, `selfhost_shutdown`, …).
+- **Sentry.** Set `SENTRY_DSN` (or mount `SENTRY_DSN_FILE`) to enable error reporting. Keep
+  `SENTRY_ENVIRONMENT=selfhost`; leave `SENTRY_RELEASE` empty on official images so the baked
+  `GITTENSORY_VERSION` is used. For custom images, set `SENTRY_RELEASE` to the exact release id whose source maps
+  you uploaded. In Sentry's GitHub integration, map stack traces with **Stack Trace Root** `/app` and
+  **Source Code Root** `.`.
 - **Data + backup.** Everything is the single SQLite file on the `gittensory-data` volume (WAL mode). Back up
   by snapshotting the volume or copying the `.sqlite` file. Migrations are idempotent and re-checked at boot.
   For **continuous, point-in-time backup**, enable the optional [Litestream](https://litestream.io) sidecar in

@@ -9,6 +9,15 @@ let active = false;
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
 
+function firstNonBlank(...values: Array<string | undefined>): string | undefined {
+  return values.map((value) => value?.trim()).find((value): value is string => Boolean(value));
+}
+
+/** Resolve the Sentry release id from explicit override first, then the image-baked self-host version. */
+export function resolveSentryRelease(env: NodeJS.ProcessEnv): string | undefined {
+  return firstNonBlank(env.SENTRY_RELEASE, env.GITTENSORY_VERSION);
+}
+
 /** beforeSend scrubber — redact anything token/secret-like before an event leaves the box (privacy boundary). */
 export function scrubEvent<T>(event: T): T {
   const redact = (obj: unknown, depth: number): void => {
@@ -38,10 +47,11 @@ export function scrubEvent<T>(event: T): T {
 export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!env.SENTRY_DSN) return false;
   Sentry = await import("@sentry/node");
+  const release = resolveSentryRelease(env);
   Sentry.init({
     dsn: env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT ?? "production",
-    release: env.SENTRY_RELEASE ?? env.GITTENSORY_VERSION,
+    ...(release ? { release } : {}),
     tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
     serverName: env.PUBLIC_API_ORIGIN,
     beforeSend: (e) => scrubEvent(e),

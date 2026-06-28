@@ -3,10 +3,13 @@
 # Cloudflare Worker (wrangler) deploy is unaffected. SECRETS ARE NEVER BAKED: supply them at run time via
 # the .env file or mounted *_FILE secrets (see docker-compose.yml + .env.example).
 
+ARG GITTENSORY_VERSION=
+
 # --- build: install deps + bundle the Node entry --------------------------------------------------------
 # ECR Public Gallery mirrors Docker Official Images with no rate limits and no auth.
 FROM public.ecr.aws/docker/library/node:24-slim AS build
 WORKDIR /app
+ARG SELFHOST_SOURCEMAP=false
 COPY package*.json ./
 # --ignore-scripts: no native builds are needed (SQLite is the built-in node:sqlite; @hono/node-server is
 # pure JS; esbuild ships its binary as an optional dependency, not a script).
@@ -14,19 +17,21 @@ RUN npm ci --ignore-scripts
 COPY . .
 # --all: bundle every dependency into one self-contained dist/server.mjs, so the runtime image needs no
 # node_modules (≈10× smaller). The bundle has zero `cloudflare:*` imports (stubbed at build), so no loader.
-RUN node scripts/build-selfhost.mjs --all
+# Release builds set SELFHOST_SOURCEMAP=true so Sentry can unminify the production bundle.
+RUN if [ "$SELFHOST_SOURCEMAP" = "true" ]; then SELFHOST_SOURCEMAP=1 node scripts/build-selfhost.mjs --all; else node scripts/build-selfhost.mjs --all; fi
 
-# --- runtime: slim, non-root ----------------------------------------------------------------------------
-FROM public.ecr.aws/docker/library/node:24-slim AS runtime
+# --- runtime base: slim, non-root -----------------------------------------------------------------------
+FROM public.ecr.aws/docker/library/node:24-slim AS runtime-base
 WORKDIR /app
+ARG GITTENSORY_VERSION
 ENV NODE_ENV=production \
     PLATFORM=self-hosted \
     PORT=8787 \
     DATABASE_PATH=/data/gittensory.sqlite \
     MIGRATIONS_DIR=/app/migrations \
-    NPM_CONFIG_PREFIX=/home/node/.npm-global
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/migrations ./migrations
+    NPM_CONFIG_PREFIX=/home/node/.npm-global \
+    GITTENSORY_VERSION=${GITTENSORY_VERSION} \
+    NODE_OPTIONS=--enable-source-maps
 # Optional: bake the Claude Code / Codex CLIs so the `claude-code` / `codex` subscription providers (#979)
 # work in-image. Build with `--build-arg INSTALL_AI_CLIS=true`. No credentials are baked — operators mint
 # CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) / codex auth at run time and pass it via the env.
@@ -47,7 +52,7 @@ USER root
 # Optional: enable visual review via an external Chrome sidecar (e.g. `browserless/chrome:latest`).
 # Build with `--build-arg INSTALL_VISUAL_REVIEW=true` then set BROWSER_WS_ENDPOINT=<ws-url> at runtime.
 ARG INSTALL_VISUAL_REVIEW=false
-COPY --from=build /app/package*.json ./
+COPY package*.json ./
 RUN if [ "$INSTALL_VISUAL_REVIEW" = "true" ]; then npm install puppeteer-core@22.13.1 --ignore-scripts; fi
 # Data dir (the SQLite file) — owned by the unprivileged node user; mount a volume here to persist.
 RUN mkdir -p /data && chown -R node:node /data /app
@@ -61,4 +66,18 @@ EXPOSE 8787
 # Postgres cold start (waitForPostgres blocks up to 30s before the HTTP server even binds).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8787)+'/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "dist/server.mjs"]
+
+# Release target: consume the already-built, Sentry-injected dist/ from a named BuildKit context:
+#   docker buildx build --target runtime-prebuilt --build-context selfhost_dist=./dist ...
+# This keeps the uploaded source maps and the deployed bundle byte-identical.
+FROM runtime-base AS runtime-prebuilt
+COPY --chown=node:node --from=selfhost_dist / ./dist
+COPY --chown=node:node migrations ./migrations
+CMD ["node", "dist/server.mjs"]
+
+# Default target: normal local/CI image builds still compile inside Docker.
+FROM runtime-base AS runtime
+COPY --chown=node:node --from=build /app/dist ./dist
+COPY --chown=node:node --from=build /app/migrations ./migrations
 CMD ["node", "dist/server.mjs"]

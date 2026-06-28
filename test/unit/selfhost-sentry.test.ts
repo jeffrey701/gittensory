@@ -29,6 +29,7 @@ import {
   installStructuredLogForwarding,
   scrubEvent,
   resetSentryForTest,
+  resolveSentryRelease,
 } from "../../src/selfhost/sentry";
 
 beforeEach(() => {
@@ -96,6 +97,7 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(mocks.init).toHaveBeenCalledTimes(1);
     const opts = mocks.init.mock.calls[0]![0];
     expect(opts.environment).toBe("production");
+    expect(opts.release).toBeUndefined();
     expect(opts.tracesSampleRate).toBe(0);
     expect(
       opts.beforeSend({ extra: { sessionToken: "s" } }).extra.sessionToken,
@@ -115,6 +117,33 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(opts.release).toBe("v9");
     expect(opts.tracesSampleRate).toBe(0.5);
     expect(opts.serverName).toBe("https://self.host");
+  });
+
+  it("uses the image-baked version as the release fallback and ignores blank overrides", async () => {
+    expect(
+      resolveSentryRelease({
+        SENTRY_RELEASE: "  ",
+        GITTENSORY_VERSION: " gittensory-selfhost@0.1.0 ",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toBe("gittensory-selfhost@0.1.0");
+
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_RELEASE: "",
+      GITTENSORY_VERSION: "gittensory-selfhost@0.1.0",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(mocks.init.mock.calls[0]![0].release).toBe(
+      "gittensory-selfhost@0.1.0",
+    );
+  });
+
+  it("prefers an explicit nonblank SENTRY_RELEASE over GITTENSORY_VERSION", () => {
+    expect(
+      resolveSentryRelease({
+        SENTRY_RELEASE: "custom@sha",
+        GITTENSORY_VERSION: "gittensory-selfhost@0.1.0",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toBe("custom@sha");
   });
 
   it("captureError sends with context, and without context skips setContext", async () => {

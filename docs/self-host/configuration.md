@@ -87,6 +87,23 @@ See [ai-providers.md](./ai-providers.md) for the full provider/model/effort/time
 | `AI_EMBED_BASE_URL` / `_MODEL` / `_PROVIDER` | Dedicated RAG embed provider                                                          |
 | `GITTENSORY_REPO_CONFIG_DIR`                 | Container-private per-repo config dir                                                 |
 
+## Sentry environment variables
+
+Sentry is off unless `SENTRY_DSN` is set. Official self-host release images bake
+`GITTENSORY_VERSION=gittensory-selfhost@<version>`; `initSentry()` uses that as the release id unless
+`SENTRY_RELEASE` is explicitly set.
+
+| Var                         | Purpose                                                                 |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `SENTRY_DSN`                | Enables Sentry error reporting when set                                 |
+| `SENTRY_DSN_FILE`           | Optional mounted-file form, handled by the existing `*_FILE` loader     |
+| `SENTRY_ENVIRONMENT`        | Runtime environment; use `selfhost` for Docker-stack installs           |
+| `SENTRY_RELEASE`            | Optional override for custom images; leave empty on official images     |
+| `SENTRY_TRACES_SAMPLE_RATE` | Optional tracing sample rate; default `0` keeps tracing off             |
+| `GITTENSORY_VERSION`        | Image-baked release id used as Sentry fallback                          |
+
+For Sentry's GitHub code mapping, use **Stack Trace Root** `/app` and **Source Code Root** `.`.
+
 ## Secrets — never commit them
 
 `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `INTERNAL_JOB_TOKEN`, `TOKEN_ENCRYPTION_SECRET`, the App private

@@ -114,6 +114,15 @@ AI review entirely in advisory mode. If you still see repeats, check for an auto
 **Fix:** set `CODEX_AI_MODEL=gpt-5.5` and `CODEX_AI_EFFORT=high` for the current recommended self-host Codex
 reviewer. Leave `CODEX_HOME` unset in the app environment.
 
+### Sentry issues still point at `dist/server.mjs`
+
+**Cause:** Sentry is enabled, but the running image's release id does not match an uploaded self-host release
+artifact, or the GitHub code mapping is pointed at generated `dist/` output.
+**Fix:** official images set `GITTENSORY_VERSION=gittensory-selfhost@<version>` and the release workflow uploads
+the matching source maps automatically. Leave `SENTRY_RELEASE` empty unless you are running a custom image with a
+custom uploaded release. In Sentry's GitHub integration, set **Stack Trace Root** to `/app` and **Source Code
+Root** to `.`.
+
 ### `codex_credential_isolation_required`
 
 **Cause:** the Codex subscription reviewer is fail-closed unless you explicitly opt into mounted

@@ -20,27 +20,100 @@ permissions:
   contents: write # create the GitHub Release
   packages: write # push to GHCR
 
+concurrency:
+  group: release-selfhost-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # Environment gate — requires reviewer approval before a release runs (configure under repo Settings > Environments).
     environment: release
+    env:
+      SENTRY_ORG: jsonbored
+      SENTRY_PROJECT: gittensory
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify release commit is on main
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
+            echo "::error::Self-host releases must be cut from a commit reachable from main."
+            exit 1
+          fi
 
       - name: Resolve version
         id: version
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "v=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
           else
-            echo "v=${GITHUB_REF_NAME#selfhost-v}" >> "$GITHUB_OUTPUT"
+            case "$REF_NAME" in
+              selfhost-v*) version="${REF_NAME#selfhost-v}" ;;
+              *) echo "::error::Invalid self-host release tag: $REF_NAME"; exit 1 ;;
+            esac
           fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must be plain semver (example: 0.1.0)"
+            exit 1
+          fi
+          release="gittensory-selfhost@$version"
+          echo "v=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      - name: Build self-host bundle for release
+        run: SELFHOST_SOURCEMAP=1 SELFHOST_BUNDLE_ALL=1 node scripts/build-selfhost.mjs --all --sourcemap
+
+      - name: Detect Sentry release token
+        id: sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require Sentry token for official release
+        if: github.repository == 'JSONbored/gittensory' && steps.sentry.outputs.enabled != 'true'
+        run: |
+          echo "::error::Configure SENTRY_AUTH_TOKEN in the release environment before publishing official self-host images."
+          exit 1
+
+      - name: Prepare Sentry release + source maps
+        if: steps.sentry.outputs.enabled == 'true'
+        uses: getsentry/action-release@ff07929a6537bac57790c3451cf4d364aca38528 # v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        with:
+          release: ${{ steps.version.outputs.release }}
+          set_commits: auto
+          ignore_missing: true
+          ignore_empty: true
+          sourcemaps: dist
+          url_prefix: /app/dist
+          strip_common_prefix: true
+          finalize: false
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -65,13 +138,19 @@ jobs:
             org.opencontainers.image.title=gittensory-selfhost
             org.opencontainers.image.description=Self-hostable Gittensory review engine
             org.opencontainers.image.version=${{ steps.version.outputs.v }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build + push (linux/amd64 + linux/arm64)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
+          target: runtime-prebuilt
+          build-contexts: |
+            selfhost_dist=./dist
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            GITTENSORY_VERSION=${{ steps.version.outputs.release }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
@@ -92,3 +171,14 @@ jobs:
             Multi-arch (linux/amd64 + linux/arm64). See [docs/self-hosting.md](docs/self-hosting.md) for setup.
             To include the Claude Code / Codex subscription CLIs, build locally with
             `--build-arg INSTALL_AI_CLIS=true`.
+            Sentry release id baked into the image: `${{ steps.version.outputs.release }}`.
+
+      - name: Finalize Sentry release
+        if: steps.sentry.outputs.enabled == 'true'
+        uses: getsentry/action-release@ff07929a6537bac57790c3451cf4d364aca38528 # v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        with:
+          release: ${{ steps.version.outputs.release }}
+          environment: selfhost
+          set_commits: skip
