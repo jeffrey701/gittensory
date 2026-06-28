@@ -311,7 +311,7 @@ describe("advisory rules", () => {
     expect(evaluateGateCheck(splitAdvisory).conclusion).toBe("success");
   });
 
-  it("only enforces readiness score when quality gate mode is block", () => {
+  it("keeps readiness score advisory even when legacy config says block", () => {
     const advisory = buildPullRequestAdvisory(repo, {
       repoFullName: repo.fullName,
       number: 24,
@@ -330,17 +330,17 @@ describe("advisory rules", () => {
     expect(evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: 90, readinessScore: null }).conclusion).toBe("success");
     expect(evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: 90, readinessScore: 90 }).conclusion).toBe("success");
 
-    const failingGate = evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: 90, readinessScore: 89.4 });
-    const output = formatGateCheckOutput(failingGate);
+    const advisoryGate = evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: 90, readinessScore: 89.4 });
 
-    expect(failingGate.conclusion).toBe("failure");
-    expect(failingGate.blockers.map((finding) => finding.code)).toEqual(["readiness_score_below_threshold"]);
-    expect(output.text).toContain("Readiness score is below the configured threshold");
-    expect(output.text).toContain("Action: Address the short explicit PR panel actions");
+    expect(advisoryGate.conclusion).toBe("success");
+    expect(advisoryGate.blockers).toEqual([]);
+    expect(advisoryGate.warnings.map((finding) => finding.code)).toEqual(["readiness_score_below_threshold"]);
+    expect(formatGateCheckOutput(advisoryGate).text).not.toContain("Readiness score is below the configured threshold");
 
-    expect(evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: 101, readinessScore: -5 }).blockers[0]?.detail).toContain("0/100");
+    expect(evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: 101, readinessScore: -5 }).warnings[0]?.detail).toContain("0/100");
     expect(evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: 99, readinessScore: 102 }).conclusion).toBe("success");
     expect(evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: Number.NaN, readinessScore: 10 }).conclusion).toBe("success");
+    expect(evaluateGateCheck(advisory, { mergeReadinessGateMode: "block", qualityGateMinScore: 90, readinessScore: 10 }).conclusion).toBe("success");
   });
 
   it("summarizes multiple configured hard blockers without swallowing advisory warnings", () => {
@@ -358,12 +358,12 @@ describe("advisory rules", () => {
 
     expect(gate.conclusion).toBe("failure");
     // Title names the blocker count; summary enumerates every active blocker with its fix.
-    expect(gate.title).toBe("Gittensory Gate: 3 blockers");
+    expect(gate.title).toBe("Gittensory Gate: 2 blockers");
     expect(gate.summary).toContain("No linked issue detected");
     expect(gate.summary).toContain("Linked issue overlaps another open PR");
-    expect(gate.summary).toContain("Readiness score is below the configured threshold — Address the short explicit PR panel actions");
-    expect(gate.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue", "duplicate_pr_risk", "readiness_score_below_threshold"]);
-    expect(gate.warnings.map((finding) => finding.code)).toEqual(["busy_pr_queue"]);
+    expect(gate.summary).not.toContain("Readiness score is below the configured threshold");
+    expect(gate.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue", "duplicate_pr_risk"]);
+    expect(gate.warnings.map((finding) => finding.code)).toEqual(["busy_pr_queue", "readiness_score_below_threshold"]);
   });
 
   it("gates NON-confirmed contributors normally — a real blocker closes them like a confirmed author (#gate-nonconfirmed)", () => {

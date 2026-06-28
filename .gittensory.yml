@@ -40,7 +40,7 @@ gate:
   linkedIssue: advisory        # block | advisory | off — issues aren't always available; advise, don't block
   duplicates: block            # block | advisory | off — block obvious duplicate PRs
   readiness:
-    mode: advisory             # block | advisory | off — readiness-score floor
+    mode: advisory             # advisory | off — readiness score is informational and never blocks the Gate
     minScore: 60
   # aiReview:                  # opt-in AI maintainer review (off by default; needs the AI flags enabled)
   #   mode: advisory           # block | advisory | off — block only blocks on a dual-model consensus defect

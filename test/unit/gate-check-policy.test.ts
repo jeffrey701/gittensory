@@ -395,6 +395,14 @@ describe("merge-readiness composite gate (#551)", () => {
     expect(result.summary).toContain("No linked issue detected");
     expect(result.summary).toContain("Possible duplicate PR");
   });
+
+  it("does not escalate readiness score into a blocker", () => {
+    const eff = resolveEffectiveSettings(settings({ mergeReadinessGateMode: "block", qualityGateMinScore: 90 }), parseFocusManifest(null));
+    const result = evaluateGateCheck({ ...missingIssueAdvisory(), findings: [] }, gateCheckPolicy(eff, 42, true));
+    expect(result.conclusion).toBe("success");
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings.map((finding) => finding.code)).toEqual(["readiness_score_below_threshold"]);
+  });
 });
 
 describe("first-time-contributor grace (#552)", () => {

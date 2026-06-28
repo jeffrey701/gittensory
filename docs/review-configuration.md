@@ -99,8 +99,8 @@ already-enabled gate.
 | Policy pack | `gate.pack` | `gatePack` | `gittensor` / `oss-anti-slop` | `gittensor` | `gittensor` = confirmed-contributor-gated, registry-aware. `oss-anti-slop` runs the deterministic rules against any author on any repo. |
 | Linked-issue gate | `gate.linkedIssue` | `linkedIssueGateMode` | `off`/`advisory`/`block` | `advisory` | If the dashboard "Require linked issue" toggle (`requireLinkedIssue`) is on but this is `off`, it is auto-promoted to `block`. |
 | Duplicate-PR gate | `gate.duplicates` | `duplicatePrGateMode` | `off`/`advisory`/`block` | `block` | Detects duplicate/superseding PRs. |
-| Quality / merge-readiness score gate | `gate.readiness.mode` | `qualityGateMode` | `off`/`advisory`/`block` | `advisory` | The PR-quality score gate. |
-| Quality min score | `gate.readiness.minScore` | `qualityGateMinScore` | number 0–100 (nullable) | `null` | At/above this score the quality dimension passes; `null` = engine default band. |
+| Quality / merge-readiness score signal | `gate.readiness.mode` | `qualityGateMode` | `off`/`advisory`/`block` | `advisory` | Advisory/informational only. `block` is accepted for older configs but does not fail the Gate check. |
+| Quality min score | `gate.readiness.minScore` | `qualityGateMinScore` | number 0–100 (nullable) | `null` | Advisory warning threshold for the readiness signal; `null` disables the threshold. |
 | Slop gate | `gate.slop.mode` | `slopGateMode` | `off`/`advisory`/`block` | `off` | Deterministic anti-slop signal. `advisory` surfaces the slop score + warnings; `block` also hard-blocks at/above the min score. Opt-in. |
 | Slop min score | `gate.slop.minScore` | `slopGateMinScore` | number 0–100 (nullable) | `null` (engine uses `60`, the "high" band) | The slop-risk threshold at/above which `slop block` blocks. |
 | Slop AI advisory | `gate.slop.aiAdvisory` | `slopAiAdvisory` | bool | `false` | When `true` **and** slop is not `off`, a free Workers-AI pass adds an **advisory-only** `ai_slop_advisory` finding. Never feeds the slop score or the gate. |
