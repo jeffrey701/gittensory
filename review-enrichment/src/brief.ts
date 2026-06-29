@@ -20,6 +20,7 @@ import { scanCodeowners } from "./analyzers/codeowners.js";
 import { scanSecretLog } from "./analyzers/secret-log.js";
 import { scanAssetWeight } from "./analyzers/asset-weight.js";
 import { scanTyposquat } from "./analyzers/typosquat.js";
+import { scanRevertRecurrence } from "./analyzers/revert-recurrence.js";
 import { renderBrief } from "./render.js";
 import { captureAnalyzerDegradation } from "./sentry.js";
 
@@ -41,6 +42,7 @@ const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   secretLog: (req, signal) => scanSecretLog(req, signal),
   assetWeight: (req, signal) => scanAssetWeight(req, fetch, { signal }),
   typosquat: (req, signal) => scanTyposquat(req, fetch, { signal }),
+  revertRecurrence: (req) => scanRevertRecurrence(req),
 };
 
 function runWithTimeout<T>(

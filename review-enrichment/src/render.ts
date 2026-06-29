@@ -254,6 +254,20 @@ export function renderBrief(
     }
   }
 
+  const reverts = findings.revertRecurrence ?? [];
+  if (reverts.length) {
+    lines.push(
+      "### Revert / re-introduce recurrence (watch for regressions)",
+    );
+    for (const item of reverts) {
+      const where =
+        item.kind === "explicit-revert"
+          ? `PR ${item.source ?? "text"}`
+          : safeCodeSpan(item.path ?? "");
+      lines.push(`- ${where}: ${item.reason}`);
+    }
+  }
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =

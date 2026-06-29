@@ -162,6 +162,22 @@ export interface TyposquatFinding {
   reason: string;
 }
 
+export interface RevertRecurrenceFinding {
+  /** `explicit-revert`: revert/rollback language in the PR title or body. `symmetric-churn`: a file
+   *  whose diff removes lines that re-appear as additions — the churn pattern of reverting/re-introducing work. */
+  kind: "explicit-revert" | "symmetric-churn";
+  /** Where an explicit revert signal was found (set for `explicit-revert`). */
+  source?: "title" | "body";
+  /** File path carrying revert-like symmetric churn (set for `symmetric-churn`). */
+  path?: string;
+  /** The subject or commit an explicit revert points at, when parseable. */
+  revertedSubject?: string;
+  /** Count of distinct lines removed and re-added in the file (set for `symmetric-churn`). */
+  churnedLines?: number;
+  /** Short, public-safe explanation of why the change was flagged. */
+  reason: string;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -177,6 +193,7 @@ export interface BriefFindings {
   secretLog?: SecretLogFinding[];
   assetWeight?: AssetWeightFinding[];
   typosquat?: TyposquatFinding[];
+  revertRecurrence?: RevertRecurrenceFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";
