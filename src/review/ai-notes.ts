@@ -15,8 +15,7 @@ export function splitAiReviewNits(notes: string): { main: string; nits: string[]
     .slice(marker)
     .split("\n")
     .slice(1)
-    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
+    .map((line) => line.replace(/^\s*[-*]\s*(?:\[[ xX]\]\s*)?/, "").trim())
     .filter(Boolean);
   return { main: notes.slice(0, marker).trim(), nits };
 }
-

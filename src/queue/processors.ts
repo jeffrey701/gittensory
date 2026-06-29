@@ -3873,9 +3873,22 @@ export async function runAiReviewForAdvisory(
         repo: args.repoFullName,
         pr: args.pr.number,
         head_sha: args.advisory.headSha,
+        ai_review_mode: args.settings.aiReviewMode,
+        reviewer_count: result.reviewerCount,
+        public_notes: hasPublicReviewAssessment(result.advisoryNotes),
+        review_diagnostics: result.reviewDiagnostics ?? [],
       });
     }
     args.advisory.findings.push(...findings);
+    if (result.inconclusive && hasPublicReviewAssessment(result.advisoryNotes)) {
+      return {
+        notes: result.advisoryNotes ?? "",
+        reviewerCount: result.reviewerCount,
+        inlineFindings: [],
+        findings,
+        cacheable: false,
+      };
+    }
     if (hasPublicReviewAssessment(result.advisoryNotes)) {
       return {
         notes: result.advisoryNotes ?? "",
@@ -3916,6 +3929,7 @@ export async function runAiReviewForAdvisory(
         head_sha: args.advisory.headSha,
         ai_review_mode: args.settings.aiReviewMode,
         reviewer_count: result.reviewerCount,
+        review_diagnostics: result.reviewDiagnostics ?? [],
         configured_reviewers:
           env.AI_REVIEW_PLAN?.reviewers?.map((reviewer) => reviewer.model) ??
           null,
@@ -4763,6 +4777,8 @@ async function maybePublishPrPublicSurface(
         repo: repoFullName,
         pr: pr.number,
         head_sha: advisory.headSha,
+        reviewer_count: aiReview?.reviewerCount ?? 0,
+        public_notes: hasPublicReviewAssessment(aiReview?.notes),
       });
     }
 

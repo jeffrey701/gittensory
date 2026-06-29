@@ -662,7 +662,7 @@ describe("BYOK provider dispatch", () => {
 });
 
 describe("Workers AI fallback + degraded output", () => {
-  it("tries the per-slot fallback model then returns no notes when every opinion is unparseable", async () => {
+  it("tries the per-slot fallback model then preserves public fallback notes when every opinion is unparseable", async () => {
     const run = vi.fn(async (_model: string) => ({
       response: "this is not json at all",
     }));
@@ -673,7 +673,8 @@ describe("Workers AI fallback + degraded output", () => {
       AI_DAILY_NEURON_BUDGET: "100000",
     });
     const result = await runGittensoryAiReview(env, baseInput);
-    expect(result.status === "ok" && result.advisoryNotes).toBeNull();
+    expect(result.status === "ok" && result.advisoryNotes).toContain("this is not json at all");
+    expect(result.status === "ok" && result.inconclusive).toBe(true);
     // primary 3× + fallback 3× retries, all unparseable.
     expect(run).toHaveBeenCalledTimes(6);
   });
@@ -1169,10 +1170,10 @@ describe("pure helpers", () => {
     expect(synthesizeDefect([review([""], 0.5)])).toBeNull();
   });
 
-  it("runWorkersOpinion returns null without a binding and handles a single-model (no distinct fallback) list", async () => {
+  it("runWorkersOpinion returns an empty outcome without a binding and handles a single-model (no distinct fallback) list", async () => {
     expect(
       await runWorkersOpinion(createTestEnv({}), "m", "f", "sys", "user", 256),
-    ).toBeNull();
+    ).toEqual({ review: null });
     const run = vi.fn(async (_model: string) => ({ response: reviewJson() }));
     const env = createTestEnv({ AI: { run } as unknown as Ai });
     // fallback === primary exercises the single-element model list branch.
@@ -1184,7 +1185,7 @@ describe("pure helpers", () => {
       "user",
       256,
     );
-    expect(parsed?.assessment).toContain("reasonable");
+    expect(parsed.review?.assessment).toContain("reasonable");
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -1196,7 +1197,7 @@ describe("pure helpers", () => {
     });
     const env = createTestEnv({ AI: { run } as unknown as Ai });
     const result = await runWorkersOpinion(env, "primary-model", "", "sys", "user", 256);
-    expect(result).toBeNull();
+    expect(result).toEqual({ review: null });
     const exhausted = logSpy.mock.calls
       .map((c) => c[0])
       .find((l) => typeof l === "string" && l.includes("ai_review_provider_exhausted"));
@@ -1211,17 +1212,22 @@ describe("pure helpers", () => {
     warnSpy.mockRestore();
   });
 
-  it("does NOT log exhausted when the model runs but returns unparseable output (no provider error)", async () => {
+  it("logs unparseable exhaustion separately when the model runs but returns unparseable output", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const run = vi.fn(async () => ({ response: "not json at all" }));
     const env = createTestEnv({ AI: { run } as unknown as Ai });
     const result = await runWorkersOpinion(env, "primary-model", "", "sys", "user", 256);
-    expect(result).toBeNull();
+    expect(result).toEqual({ review: null, fallbackNote: "not json at all" });
     expect(
       logSpy.mock.calls
         .map((c) => c[0])
         .some((l) => typeof l === "string" && l.includes("ai_review_provider_exhausted")),
     ).toBe(false);
+    expect(
+      logSpy.mock.calls
+        .map((c) => c[0])
+        .some((l) => typeof l === "string" && l.includes("ai_review_provider_unparseable_exhausted")),
+    ).toBe(true);
     logSpy.mockRestore();
   });
 

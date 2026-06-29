@@ -290,14 +290,22 @@ describe("runAiReviewForAdvisory", () => {
     expect(adv.findings.map((f) => f.code)).toEqual(["ai_review_inconclusive"]);
     expect(result?.notes).toBeDefined(); // the single parseable opinion still produces advisory notes
     // The unproducible review is reported to Sentry with PR context so the maintainer can SEE it (#1468).
-    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), {
-      kind: "review",
-      reason: "ai_review_inconclusive",
-      owner: "acme",
-      repo: "acme/widgets",
-      pr: 3,
-      head_sha: "sha3",
-    });
+    expect(captureSpy).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        kind: "review",
+        reason: "ai_review_inconclusive",
+        owner: "acme",
+        repo: "acme/widgets",
+        pr: 3,
+        head_sha: "sha3",
+        public_notes: true,
+        reviewer_count: 1,
+        review_diagnostics: expect.arrayContaining([
+          expect.objectContaining({ status: "unparseable_output" }),
+        ]),
+      }),
+    );
     captureSpy.mockRestore();
   });
 
@@ -464,7 +472,7 @@ describe("runAiReviewForAdvisory", () => {
   it("holds for manual review when the AI provider produces no public notes", async () => {
     const adv = advisory();
     const captureSpy = vi.spyOn(sentryModule, "captureReviewFailure");
-    const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: "not json" })), {
+    const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: "" })), {
       settings: { aiReviewMode: "advisory" } as RepositorySettings,
       advisory: adv,
       repoFullName: "acme/widgets",
@@ -494,6 +502,22 @@ describe("runAiReviewForAdvisory", () => {
       }),
     );
     captureSpy.mockRestore();
+  });
+
+  it("preserves public-safe unstructured AI text while holding the PR for manual review", async () => {
+    const adv = advisory();
+    const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: "Looks coherent, but please verify the new cache branch before merging." })), {
+      settings: { aiReviewMode: "advisory" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(result?.reviewerCount).toBe(1);
+    expect(result?.notes).toContain("returned public review text but not the expected structured verdict");
+    expect(result?.notes).toContain("Looks coherent");
+    expect(adv.findings.map((f) => f.code)).toEqual(["ai_review_inconclusive"]);
   });
 
   it("preserves model nits when the model omits the assessment summary", async () => {

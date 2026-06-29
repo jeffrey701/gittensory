@@ -203,6 +203,7 @@ export type GittensoryAiReviewResult =
       estimatedNeurons: number;
       reviewerCount: number;
       inlineFindings: InlineFinding[];
+      reviewDiagnostics?: AiReviewDiagnostic[] | undefined;
     };
 
 /** A line-anchored review finding the model can emit for quiet inline PR comments (#inline-comments). `line` is
@@ -230,6 +231,20 @@ export type ModelReview = {
   // Line-anchored findings for inline PR review comments (#inline-comments). ALWAYS present (parseModelReview
   // sets []); populated only when the caller asked for them (input.inlineFindings) AND the model emitted any.
   inlineFindings: InlineFinding[];
+};
+
+export type AiReviewDiagnostic = {
+  model: string;
+  attempt: number;
+  status: "parsed" | "empty_output" | "unparseable_output" | "provider_error";
+  responseChars?: number | undefined;
+  hasJsonObject?: boolean | undefined;
+  error?: string | undefined;
+};
+
+type ReviewerOpinionOutcome = {
+  review: ModelReview | null;
+  fallbackNote?: string | undefined;
 };
 
 type AiGatewayOptions = { gateway?: { id: string } };
@@ -510,9 +525,10 @@ async function runWorkersOpinion(
   system: string,
   user: string,
   maxTokens: number,
-): Promise<ModelReview | null> {
+  diagnostics: AiReviewDiagnostic[] = [],
+): Promise<ReviewerOpinionOutcome> {
   const ai = env.AI as unknown as AiRunner | undefined;
-  if (!ai || typeof ai.run !== "function") return null;
+  if (!ai || typeof ai.run !== "function") return { review: null };
   // Route through Cloudflare AI Gateway when configured (caching, rate-limiting, logging, fallback). The
   // diff/prompt is the cache key input, scoped per model + content, so distinct PRs never share a cached
   // review. Unset → direct binding call (unchanged behavior).
@@ -523,6 +539,10 @@ async function runWorkersOpinion(
   // Track the last provider error so we can fail-LOUD once ALL models × attempts are exhausted (below). Per-attempt
   // logs are warn (noisy retries, skipped by the central Sentry forwarder); the exhausted summary is error (#26).
   let lastError: unknown;
+  let lastUnstructuredText = "";
+  let lastUnparseable:
+    | { model: string; attempt: number; responseChars: number; hasJsonObject: boolean }
+    | undefined;
   for (const model of fallback && fallback !== primary
     ? [primary, fallback]
     : [primary]) {
@@ -540,12 +560,34 @@ async function runWorkersOpinion(
           },
           extra,
         );
-        const parsed = parseModelReview(coerceAiText(result));
-        if (parsed) return parsed;
+        const text = coerceAiText(result);
+        const parsed = parseModelReview(text);
+        if (parsed) {
+          diagnostics.push({ model, attempt, status: "parsed", responseChars: text.length, hasJsonObject: Boolean(extractLastJsonObject(text)) });
+          return { review: parsed };
+        }
+        const hasJsonObject = Boolean(extractLastJsonObject(text));
+        const status = text.trim() ? "unparseable_output" : "empty_output";
+        diagnostics.push({ model, attempt, status, responseChars: text.length, hasJsonObject });
+        if (text.trim()) {
+          lastUnstructuredText = text;
+          lastUnparseable = { model, attempt, responseChars: text.length, hasJsonObject };
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "ai_review_provider_unparseable_output",
+              model,
+              attempt,
+              responseChars: text.length,
+              hasJsonObject,
+            }),
+          );
+        }
       } catch (error) {
         // Fail-LOUD (#1566): a provider/CLI failure (e.g. the claude-code CLI absent → spawn ENOENT, or an auth/API
         // error) must be VISIBLE, not silently swallowed into a "no usable output" review. Log every failed attempt;
         // the loop still falls through to the fallback model so a transient error doesn't abort the whole review.
+        diagnostics.push({ model, attempt, status: "provider_error", error: errorMessage(error) });
         console.warn(
           JSON.stringify({
             level: "warn",
@@ -573,7 +615,24 @@ async function runWorkersOpinion(
       }),
     );
   }
-  return null;
+  if (lastUnparseable) {
+    console.log(
+      JSON.stringify({
+        level: "error",
+        event: "ai_review_provider_unparseable_exhausted",
+        primary,
+        fallback,
+        model: lastUnparseable.model,
+        attempt: lastUnparseable.attempt,
+        responseChars: lastUnparseable.responseChars,
+        hasJsonObject: lastUnparseable.hasJsonObject,
+      }),
+    );
+  }
+  return {
+    review: null,
+    ...(lastUnstructuredText ? { fallbackNote: lastUnstructuredText } : {}),
+  };
 }
 
 const PROVIDER_DEFAULT_MODEL: Record<AiReviewProviderKey["provider"], string> =
@@ -595,6 +654,8 @@ export type ProviderFailure = "timeout" | "http_error" | "exception";
 type ProviderReviewOutcome = {
   review: ModelReview | null;
   failure?: ProviderFailure;
+  fallbackNote?: string | undefined;
+  diagnostic?: AiReviewDiagnostic | undefined;
 };
 
 /**
@@ -672,9 +733,19 @@ async function runProviderReview(
     user,
     maxTokens,
   );
+  const model = providerKey.model || PROVIDER_DEFAULT_MODEL[providerKey.provider];
+  if (failure) return { review: null, failure, diagnostic: { model, attempt: 0, status: "provider_error", error: failure } };
+  const review = text ? parseModelReview(text) : null;
   return {
-    review: text ? parseModelReview(text) : null,
-    ...(failure ? { failure } : {}),
+    review,
+    ...(text && !review ? { fallbackNote: text } : {}),
+    diagnostic: {
+      model,
+      attempt: 0,
+      status: review ? "parsed" : text ? "unparseable_output" : "empty_output",
+      responseChars: text?.length ?? 0,
+      hasJsonObject: Boolean(text && extractLastJsonObject(text)),
+    },
   };
 }
 
@@ -704,6 +775,24 @@ function fallbackPublicAssessment(
   if (safeNits.length > 0)
     return "The AI review returned non-blocking notes for this change but did not include a separate narrative summary. Review the nits below before deciding this PR.";
   return null;
+}
+
+function fallbackUnstructuredPublicNote(text: string): string | null {
+  const safe = toPublicSafe(text.slice(0, 4000));
+  if (!safe) return null;
+  return [
+    "The AI reviewer returned public review text but not the expected structured verdict, so Gittensory is holding this PR for manual review.",
+    "",
+    safe,
+  ].join("\n").trim();
+}
+
+function composeFallbackAdvisoryNotes(notes: readonly string[]): string | null {
+  const safeNotes = [
+    ...new Set(notes.map((note) => fallbackUnstructuredPublicNote(note)).filter((note): note is string => Boolean(note))),
+  ].slice(0, 2);
+  if (safeNotes.length === 0) return null;
+  return safeNotes.join("\n\n");
 }
 
 /** Compose a public-safe markdown advisory blurb from one or two model reviews. Null if no assessment is safe. */
@@ -1022,6 +1111,8 @@ export async function runGittensoryAiReview(
   // Advisory write-up: BYOK frontier model if configured, else the free Workers-AI primary (with fallback).
   let byokFailure: ProviderFailure | undefined;
   let advisoryReview: ModelReview | null;
+  const reviewDiagnostics: AiReviewDiagnostic[] = [];
+  const fallbackNotes: string[] = [];
   if (input.providerKey) {
     const outcome = await runProviderReview(
       input.providerKey,
@@ -1031,15 +1122,20 @@ export async function runGittensoryAiReview(
     );
     advisoryReview = outcome.review;
     byokFailure = outcome.failure;
+    if (outcome.fallbackNote) fallbackNotes.push(outcome.fallbackNote);
+    if (outcome.diagnostic) reviewDiagnostics.push(outcome.diagnostic);
   } else {
-    advisoryReview = await runWorkersOpinion(
+    const outcome = await runWorkersOpinion(
       env,
       primary.model,
       primaryFallback,
       system,
       user,
       maxTokens,
+      reviewDiagnostics,
     );
+    advisoryReview = outcome.review;
+    if (outcome.fallbackNote) fallbackNotes.push(outcome.fallbackNote);
   }
 
   let consensusDefect: AiConsensusDefect | null = null;
@@ -1061,8 +1157,9 @@ export async function runGittensoryAiReview(
               system,
               user,
               maxTokens,
+              reviewDiagnostics,
             )
-          : Promise.resolve(advisoryReview),
+          : Promise.resolve<ReviewerOpinionOutcome>({ review: advisoryReview }),
         runWorkersOpinion(
           env,
           secondary.model,
@@ -1070,13 +1167,16 @@ export async function runGittensoryAiReview(
           system,
           user,
           maxTokens,
+          reviewDiagnostics,
         ),
       ]);
-      secondReview = b;
+      if (a.fallbackNote) fallbackNotes.push(a.fallbackNote);
+      if (b.fallbackNote) fallbackNotes.push(b.fallbackNote);
+      secondReview = b.review;
       // Combine per the configured strategy (#dual-ai-combiner). Default `consensus` is byte-identical to the
       // historical logic: block only on agreement, lone blocker → split, a missing opinion → inconclusive
       // (fail-closed, HELD for a human). `synthesis` merges both into one decision (no split/hold-on-disagree).
-      const combined = combineReviews([a, b], { strategy: combine, onMerge });
+      const combined = combineReviews([a.review, b.review], { strategy: combine, onMerge });
       consensusDefect = combined.defect;
       aiReviewSplit = combined.split;
       splitConfidence = combined.splitConfidence;
@@ -1091,9 +1191,11 @@ export async function runGittensoryAiReview(
             system,
             user,
             maxTokens,
+            reviewDiagnostics,
           )
-        : advisoryReview;
-      const combined = combineReviews([a], { strategy: "single" });
+        : ({ review: advisoryReview } as ReviewerOpinionOutcome);
+      if (a.fallbackNote) fallbackNotes.push(a.fallbackNote);
+      const combined = combineReviews([a.review], { strategy: "single" });
       consensusDefect = combined.defect;
       inconclusive = combined.inconclusive;
     }
@@ -1102,8 +1204,12 @@ export async function runGittensoryAiReview(
   const reviewsForNotes = [advisoryReview, secondReview].filter(
     (r): r is ModelReview => Boolean(r),
   );
+  if (fallbackNotes.length > 0 && reviewsForNotes.length === 0)
+    inconclusive = true;
   const advisoryNotes =
-    reviewsForNotes.length > 0 ? composeAdvisoryNotes(reviewsForNotes) : null;
+    reviewsForNotes.length > 0
+      ? composeAdvisoryNotes(reviewsForNotes) ?? composeFallbackAdvisoryNotes(fallbackNotes)
+      : composeFallbackAdvisoryNotes(fallbackNotes);
   // Line-anchored inline findings (#inline-comments): only propagate model output when the resolved feature gate
   // asked for it. AI output is PR-author-influenced, so the prompt suffix is not an authorization boundary.
   const inlineFindings = input.inlineFindings
@@ -1143,8 +1249,9 @@ export async function runGittensoryAiReview(
     ...(splitConfidence !== undefined ? { splitConfidence } : {}),
     inconclusive,
     estimatedNeurons,
-    reviewerCount: reviewsForNotes.length,
+    reviewerCount: Math.max(reviewsForNotes.length, fallbackNotes.length),
     inlineFindings,
+    ...(reviewDiagnostics.length > 0 ? { reviewDiagnostics } : {}),
   };
 }
 

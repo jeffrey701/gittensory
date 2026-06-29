@@ -4225,6 +4225,7 @@ export function buildPublicPrIntelligenceComment(args: {
         : "success";
   const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
   const gateBlocking = gateEnabled && (gateConclusion === "failure" || gateConclusion === "action_required");
+  const gateHeld = gateEnabled && (gateConclusion === "neutral" || gateConclusion === "action_required");
   const missingLinkedIssue = args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
   const confirmedMiner = isOfficialContributorDetection(args.detection);
   // Author with no Gittensor footprint at all (not detected via official API or cache): gittensory's
@@ -4237,20 +4238,24 @@ export function buildPublicPrIntelligenceComment(args: {
   const aiReview = args.aiReview ? splitAiReviewNits(args.aiReview.notes) : null;
   const aiReviewHasBlockers = Boolean(aiReview?.main) && aiReviewMainHasBlockers(aiReview?.main ?? "");
   const alert = aiReviewHasBlockers
-    ? "CAUTION"
-    : gateBlocking
-      ? gateConclusion === "action_required"
-        ? "WARNING"
-        : missingLinkedIssue && args.settings.linkedIssueGateMode === "block"
+      ? "CAUTION"
+      : gateBlocking
+        ? gateConclusion === "action_required"
           ? "WARNING"
-          : "CAUTION"
+          : missingLinkedIssue && args.settings.linkedIssueGateMode === "block"
+            ? "WARNING"
+            : "CAUTION"
+      : gateHeld
+        ? "WARNING"
       : hasPublicWarnings || hasRelatedWork
         ? "WARNING"
         : "TIP";
   const panelTitle = aiReviewHasBlockers
     ? "Gittensory review found blockers"
-    : args.aiReview && !gateBlocking
+    : args.aiReview && !gateBlocking && !gateHeld
       ? "Gittensory review approved this PR"
+      : gateHeld
+        ? "Gittensory review needs maintainer review"
       : gateBlocking
         ? `${GITTENSORY_GATE_CHECK_NAME} is blocking merge`
         : hasPublicWarnings || hasRelatedWork
@@ -4258,6 +4263,8 @@ export function buildPublicPrIntelligenceComment(args: {
           : "Gittensory PR readiness looks good";
   const panelSummary = gateBlocking
     ? args.gate?.summary ?? (gateConclusion === "action_required" ? "Gittensory cannot evaluate the repo state closely enough for the enabled gate." : "A repo-configured hard blocker was found.")
+    : gateHeld
+      ? args.gate?.summary ?? "Gittensory is holding this PR for maintainer review."
     : linkedDuplicatePrs.length > 0
       ? `Same-issue duplicate risk found against ${formatPrRefs(linkedDuplicatePrs)}. Maintainers should resolve the overlap before review continues.`
       : hasRelatedWork
@@ -4312,7 +4319,7 @@ export function buildPublicPrIntelligenceComment(args: {
                   "<details>",
                   `<summary>Nits (${aiReview.nits.length})</summary>`,
                   "",
-                  ...aiReview.nits.map((nit) => `- ${escapeAiReviewMarkdown(nit)}`),
+                  ...aiReview.nits.map((nit) => `- [ ] ${escapeAiReviewMarkdown(nit)}`),
                   "",
                   "</details>",
                 ]
