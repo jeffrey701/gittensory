@@ -897,6 +897,58 @@ describe("GitHub check runs", () => {
     );
   });
 
+  it("still posts the renamed review-agent check when legacy Gate cleanup fails", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let newCheckBody: { name?: string; status?: string } = {};
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens"))
+          return Response.json({ token: "installation-token" });
+        if (url.includes("/commits/legacy-cleanup-fails/check-runs")) {
+          const checkName = new URL(url).searchParams.get("check_name");
+          if (checkName === "Gittensory Orb Review Agent")
+            return Response.json({ total_count: 0, check_runs: [] });
+          if (checkName === "Gittensory Gate")
+            return Response.json({
+              total_count: 1,
+              check_runs: [
+                { id: 322, name: "Gittensory Gate", status: "in_progress" },
+              ],
+            });
+        }
+        if (url.includes("/check-runs/322") && method === "PATCH")
+          return new Response("legacy patch failed", { status: 500 });
+        if (url.includes("/check-runs") && method === "POST") {
+          newCheckBody = JSON.parse(String(init?.body)) as typeof newCheckBody;
+          return Response.json({ id: 90 }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+
+    try {
+      const result = await createOrUpdatePendingGateCheckRun(
+        createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+        123,
+        "JSONbored/gittensory",
+        gateAdvisory("legacy-cleanup-fails"),
+      );
+
+      expect(result).toMatchObject({ kind: "published", id: 90 });
+      expect(newCheckBody).toMatchObject({
+        name: "Gittensory Orb Review Agent",
+        status: "in_progress",
+      });
+      expect(warn.mock.calls.some((call) => String(call[0]).includes("legacy_gate_check_finalize_failed"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("omits details_url when the site origin cannot form a URL (#audit-details-url null arm)", async () => {
     const privateKey = await generatePrivateKeyPem();
     let capturedBody: { details_url?: string } = {};

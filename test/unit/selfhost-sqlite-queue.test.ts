@@ -196,8 +196,8 @@ describe("createSqliteQueue (durable #980)", () => {
       const driver = makeDriver();
       createSqliteQueue(driver, async () => undefined);
       driver.query(
-        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
-        [JSON.stringify(ciWebhook("ci-1")), "k1"],
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 10)",
+        [JSON.stringify(msg("unkeyed"))],
       );
       driver.query(
         "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
@@ -474,6 +474,46 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(q.stats()).toMatchObject({ gittensory_jobs_coalesced_total: 1 });
   });
 
+  it("reschedules a keyed rate-limited job when no pending duplicate exists", async () => {
+    const driver = makeDriver();
+    let calls = 0;
+    const rateLimit = new Error("secondary rate limit");
+    Object.assign(rateLimit, { status: 403 });
+    const key = `github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`;
+    const q = createSqliteQueue(
+      driver,
+      async () => {
+        calls += 1;
+        throw rateLimit;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
+      [JSON.stringify(ciWebhook("ci-active")), key],
+    );
+
+    await q.drain();
+
+    const row = driver.query(
+      "SELECT payload, status, attempts, run_after, last_error FROM _selfhost_jobs",
+      [],
+    ).rows[0] as {
+      payload: string;
+      status: string;
+      attempts: number;
+      run_after: number;
+      last_error: string | null;
+    };
+    expect(calls).toBe(1);
+    expect(JSON.parse(row.payload).deliveryId).toBe("ci-active");
+    expect(row.status).toBe("pending");
+    expect(row.attempts).toBe(0);
+    expect(row.run_after).toBeGreaterThan(Date.now());
+    expect(row.last_error).toContain("secondary rate limit");
+    expect(q.stats()).toMatchObject({ gittensory_jobs_rate_limited_total: 1 });
+  });
+
   it("consumes retryable incomplete review attempts and dead-letters after maxRetries", async () => {
     const driver = makeDriver();
     let calls = 0;
@@ -723,6 +763,51 @@ describe("createSqliteQueue (durable #980)", () => {
         gittensory_jobs_processed_total: 1,
       });
     } finally {
+      if (oldTimeout === undefined) delete process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+      else process.env.QUEUE_PROCESSING_TIMEOUT_MS = oldTimeout;
+      if (oldRecoveryJitter === undefined) delete process.env.QUEUE_RECOVERY_JITTER_MS;
+      else process.env.QUEUE_RECOVERY_JITTER_MS = oldRecoveryJitter;
+    }
+  });
+
+  it("does not reclaim an expired processing lease while that job is still active", async () => {
+    const oldTimeout = process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+    const oldRecoveryJitter = process.env.QUEUE_RECOVERY_JITTER_MS;
+    process.env.QUEUE_PROCESSING_TIMEOUT_MS = "1";
+    process.env.QUEUE_RECOVERY_JITTER_MS = "0";
+    const driver = makeDriver();
+    const seen: string[] = [];
+    const releases: Array<() => void> = [];
+    let q: ReturnType<typeof createSqliteQueue> | undefined;
+    try {
+      const queue = createSqliteQueue(
+        driver,
+        async (m) => {
+          const type = typeOf(m);
+          seen.push(type);
+          if (type === "slow") {
+            await new Promise<void>((resolve) => {
+              releases.push(resolve);
+            });
+          }
+        },
+        { concurrency: 2, backgroundConcurrency: 2, pollIntervalMs: 100_000 },
+      );
+      q = queue;
+      await queue.binding.send(msg("slow"));
+      for (let i = 0; i < 20 && releases.length === 0; i += 1)
+        await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 5));
+
+      await queue.binding.send(msg("wake-reclaimer"));
+      for (let i = 0; i < 20 && !seen.includes("wake-reclaimer"); i += 1)
+        await new Promise((r) => setTimeout(r, 10));
+
+      expect(seen.filter((type) => type === "slow")).toHaveLength(1);
+      expect(queue.stats().gittensory_jobs_recovered_total ?? 0).toBe(0);
+    } finally {
+      for (const release of releases) release();
+      if (q) await q.stop();
       if (oldTimeout === undefined) delete process.env.QUEUE_PROCESSING_TIMEOUT_MS;
       else process.env.QUEUE_PROCESSING_TIMEOUT_MS = oldTimeout;
       if (oldRecoveryJitter === undefined) delete process.env.QUEUE_RECOVERY_JITTER_MS;

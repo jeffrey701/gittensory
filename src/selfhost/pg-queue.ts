@@ -13,7 +13,6 @@ import {
   githubRateLimitRetryDelayMs,
   jobCoalesceKey,
   jobPriority,
-  nonConsumingRetryDelayMs,
   queueBackgroundConcurrency,
   queueProcessingTimeoutMs,
   queueRecoveryJitterMs,
@@ -354,25 +353,22 @@ export function createPgQueue(
       } catch (error) {
         const attempts = Number(job.attempts) + 1;
         const errMsg = error instanceof Error ? error.message : "unknown error";
-        const nonConsumingDelayMs = nonConsumingRetryDelayMs(error);
-        if (nonConsumingDelayMs !== null) {
-          const rateLimited = githubRateLimitRetryDelayMs(error) !== null;
+        const rateLimitDelayMs = githubRateLimitRetryDelayMs(error);
+        if (rateLimitDelayMs !== null) {
           const now = Date.now();
-          const retryAfter = now + (rateLimited ? rateLimitRetryDelayWithJitter(nonConsumingDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`) : nonConsumingDelayMs);
-          if (rateLimited) {
-            githubRateLimitCooldownUntil = Math.max(githubRateLimitCooldownUntil, now + nonConsumingDelayMs);
-            const deferred = await deferPendingJobsForRateLimit(nonConsumingDelayMs, now);
-            if (deferred) {
-              await recordQueueMetric("gittensory_jobs_rate_limit_deferred_total", deferred);
-              console.warn(
-                JSON.stringify({
-                  level: "warn",
-                  event: "selfhost_queue_rate_limit_cooldown",
-                  deferred,
-                  cooldown_until: githubRateLimitCooldownUntil,
-                }),
-              );
-            }
+          const retryAfter = now + rateLimitRetryDelayWithJitter(rateLimitDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`);
+          githubRateLimitCooldownUntil = Math.max(githubRateLimitCooldownUntil, now + rateLimitDelayMs);
+          const deferred = await deferPendingJobsForRateLimit(rateLimitDelayMs, now);
+          if (deferred) {
+            await recordQueueMetric("gittensory_jobs_rate_limit_deferred_total", deferred);
+            console.warn(
+              JSON.stringify({
+                level: "warn",
+                event: "selfhost_queue_rate_limit_cooldown",
+                deferred,
+                cooldown_until: githubRateLimitCooldownUntil,
+              }),
+            );
           }
           if (job.job_key && (await mergeRescheduledJobIntoPending(job as JobRow & { job_key: string }, retryAfter, errMsg))) {
             await recordQueueMetric("gittensory_jobs_coalesced_total");
@@ -382,7 +378,7 @@ export function createPgQueue(
               [retryAfter, errMsg, job.id],
             );
           }
-          await recordQueueMetric(rateLimited ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
+          await recordQueueMetric("gittensory_jobs_rate_limited_total");
           logAudit({
             event: "job_rate_limited",
             ts: Date.now(),

@@ -8,7 +8,10 @@ import {
   jobPriority,
   nonConsumingRetryDelayMs,
   queueBackgroundConcurrency,
+  queueProcessingTimeoutMs,
+  queueRecoveryJitterMs,
   queueStartupJitterMinJobs,
+  queueStartupJitterMs,
 } from "../../src/selfhost/queue-common";
 import { RetryableJobError } from "../../src/queue/retryable";
 
@@ -138,6 +141,21 @@ describe("self-host queue common helpers", () => {
       jobCoalesceKey(
         payload({
           type: "github-webhook",
+          eventName: "check_run",
+          payload: {
+            action: "completed",
+            repository: { full_name: "JSONbored/Gittensory" },
+            check_run: {
+              head_sha: "C0FFEE1",
+            },
+          },
+        }),
+      ),
+    ).toBe("github-webhook:ci-completed:jsonbored/gittensory@c0ffee1");
+    expect(
+      jobCoalesceKey(
+        payload({
+          type: "github-webhook",
           eventName: "check_suite",
           payload: {
             action: "completed",
@@ -161,6 +179,32 @@ describe("self-host queue common helpers", () => {
         }),
       ),
     ).toBe("github-webhook:pr-refresh:jsonbored/gittensory#99");
+    expect(
+      jobCoalesceKey(
+        payload({
+          type: "github-webhook",
+          eventName: "pull_request",
+          payload: {
+            action: "opened",
+            repository: { full_name: "JSONbored/Gittensory" },
+            pull_request: { number: 100, head: { sha: "BEEF123" } },
+          },
+        }),
+      ),
+    ).toBe("github-webhook:pr-refresh:jsonbored/gittensory#100@beef123");
+    expect(
+      jobCoalesceKey(
+        payload({
+          type: "github-webhook",
+          eventName: "pull_request",
+          payload: {
+            action: "opened",
+            repository: { full_name: "JSONbored/Gittensory" },
+            pull_request: { head: { sha: "BEEF123" } },
+          },
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("returns no coalesce key for malformed payloads", () => {
@@ -218,6 +262,13 @@ describe("self-host queue common helpers", () => {
         message: "rate limit",
       }),
     ).toBe(300_000);
+    expect(
+      githubRateLimitRetryDelayMs({
+        status: 429,
+        response: { headers: new Headers({ "retry-after": "soon" }) },
+        message: "secondary rate limit",
+      }),
+    ).toBe(300_000);
   });
 
   it("keeps only GitHub rate limits on the non-consuming retry path", () => {
@@ -266,6 +317,31 @@ describe("self-host queue common helpers", () => {
         77,
       ),
     ).toBe(300_000);
+  });
+
+  it("parses queue timing env values with defensive fallbacks", () => {
+    const oldStartup = process.env.QUEUE_STARTUP_JITTER_MS;
+    const oldRecovery = process.env.QUEUE_RECOVERY_JITTER_MS;
+    const oldTimeout = process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+    try {
+      process.env.QUEUE_STARTUP_JITTER_MS = "42";
+      process.env.QUEUE_RECOVERY_JITTER_MS = "25.9";
+      process.env.QUEUE_PROCESSING_TIMEOUT_MS = "not-a-number";
+
+      expect(queueStartupJitterMs()).toBe(42);
+      expect(queueRecoveryJitterMs()).toBe(25);
+      expect(queueProcessingTimeoutMs()).toBe(30 * 60_000);
+
+      process.env.QUEUE_STARTUP_JITTER_MS = "-1";
+      expect(queueStartupJitterMs()).toBe(3 * 60_000);
+    } finally {
+      if (oldStartup === undefined) delete process.env.QUEUE_STARTUP_JITTER_MS;
+      else process.env.QUEUE_STARTUP_JITTER_MS = oldStartup;
+      if (oldRecovery === undefined) delete process.env.QUEUE_RECOVERY_JITTER_MS;
+      else process.env.QUEUE_RECOVERY_JITTER_MS = oldRecovery;
+      if (oldTimeout === undefined) delete process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+      else process.env.QUEUE_PROCESSING_TIMEOUT_MS = oldTimeout;
+    }
   });
 
   it("bounds startup jitter min-jobs config to a non-negative finite integer", () => {

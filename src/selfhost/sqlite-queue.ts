@@ -14,7 +14,6 @@ import {
   githubRateLimitRetryDelayMs,
   jobCoalesceKey,
   jobPriority,
-  nonConsumingRetryDelayMs,
   queueBackgroundConcurrency,
   queueProcessingTimeoutMs,
   queueRecoveryJitterMs,
@@ -297,25 +296,22 @@ export function createSqliteQueue(
       } catch (error) {
         const attempts = job.attempts + 1;
         const errMsg = error instanceof Error ? error.message : "unknown error";
-        const nonConsumingDelayMs = nonConsumingRetryDelayMs(error);
-        if (nonConsumingDelayMs !== null) {
-          const rateLimited = githubRateLimitRetryDelayMs(error) !== null;
+        const rateLimitDelayMs = githubRateLimitRetryDelayMs(error);
+        if (rateLimitDelayMs !== null) {
           const now = Date.now();
-          const retryAfter = now + (rateLimited ? rateLimitRetryDelayWithJitter(nonConsumingDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`) : nonConsumingDelayMs);
-          if (rateLimited) {
-            githubRateLimitCooldownUntil = Math.max(githubRateLimitCooldownUntil, now + nonConsumingDelayMs);
-            const deferred = deferPendingJobsForRateLimit(driver, nonConsumingDelayMs, now);
-            if (deferred) {
-              recordQueueMetric(driver, "gittensory_jobs_rate_limit_deferred_total", deferred);
-              console.warn(
-                JSON.stringify({
-                  level: "warn",
-                  event: "selfhost_queue_rate_limit_cooldown",
-                  deferred,
-                  cooldown_until: githubRateLimitCooldownUntil,
-                }),
-              );
-            }
+          const retryAfter = now + rateLimitRetryDelayWithJitter(rateLimitDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`);
+          githubRateLimitCooldownUntil = Math.max(githubRateLimitCooldownUntil, now + rateLimitDelayMs);
+          const deferred = deferPendingJobsForRateLimit(driver, rateLimitDelayMs, now);
+          if (deferred) {
+            recordQueueMetric(driver, "gittensory_jobs_rate_limit_deferred_total", deferred);
+            console.warn(
+              JSON.stringify({
+                level: "warn",
+                event: "selfhost_queue_rate_limit_cooldown",
+                deferred,
+                cooldown_until: githubRateLimitCooldownUntil,
+              }),
+            );
           }
           if (job.job_key && mergeRescheduledJobIntoPending(driver, job as JobRow & { job_key: string }, retryAfter, errMsg)) {
             recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
@@ -325,7 +321,7 @@ export function createSqliteQueue(
               [retryAfter, errMsg, job.id],
             );
           }
-          recordQueueMetric(driver, rateLimited ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
+          recordQueueMetric(driver, "gittensory_jobs_rate_limited_total");
           logAudit({
             event: "job_rate_limited",
             ts: Date.now(),
@@ -489,7 +485,7 @@ function backfillJobPriorities(driver: SqliteDriver): number {
   let changed = 0;
   for (const row of rows as Array<{ id: number; payload: string; priority: number }>) {
     const priority = jobPriority(row.payload);
-    if (priority === Number(row.priority ?? 0)) continue;
+    if (priority === Number(row.priority)) continue;
     driver.query(`UPDATE ${TABLE} SET priority=? WHERE id=?`, [
       priority,
       row.id,
@@ -630,7 +626,7 @@ function readQueueStats(driver: SqliteDriver): Record<string, number> {
   return Object.fromEntries(
     (rows as Array<{ name: string; value: number }>).map((row) => [
       row.name,
-      Number(row.value ?? 0),
+      Number(row.value),
     ]),
   );
 }

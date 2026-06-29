@@ -12,8 +12,9 @@ export const FOREGROUND_QUEUE_PRIORITY_FLOOR = 8;
 // Webhook-driven work (a fresh PR -> its review) jumps ahead of heavy background jobs. Per-PR review refreshes
 // sit just below real webhooks, and sweep fan-out sits below those so stale surfaces are repaired during bursts.
 // Bot-generated comment edits are background noise; keeping them with real webhooks lets panel edits starve repair.
+const AGENT_REGATE_PRIORITY = 9;
 const PRIORITY_BY_TYPE = new Map([
-  ["agent-regate-pr", 9],
+  ["agent-regate-pr", AGENT_REGATE_PRIORITY],
   ["recapture-preview", 9],
   ["agent-regate-sweep", 8],
 ]);
@@ -32,9 +33,9 @@ function agentRegatePriority(payload: string): number {
       typeof message.deliveryId === "string" ? message.deliveryId : "";
     if (deliveryId.startsWith("manual-regate:")) return 99;
   } catch {
-    return PRIORITY_BY_TYPE.get("agent-regate-pr") ?? 0;
+    return AGENT_REGATE_PRIORITY;
   }
-  return PRIORITY_BY_TYPE.get("agent-regate-pr") ?? 0;
+  return AGENT_REGATE_PRIORITY;
 }
 
 export function isForegroundJobPriority(priority: number): boolean {
