@@ -181,6 +181,5 @@ jobs:
             ```
 
             Multi-arch (linux/amd64 + linux/arm64). See [docs/self-hosting.md](docs/self-hosting.md) for setup.
-            To include the Claude Code / Codex subscription CLIs, build locally with
-            `--build-arg INSTALL_AI_CLIS=true`.
+            Includes the Claude Code / Codex subscription CLIs by default; credentials stay runtime-only.
             Sentry release id baked into the image: `${{ steps.version.outputs.release }}`.

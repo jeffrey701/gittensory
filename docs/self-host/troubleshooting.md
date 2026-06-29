@@ -14,11 +14,12 @@ Real failure modes and their fixes, ordered by how often they bite. Each entry i
 
 **Symptom:** zero `ai_review` activity; reviews silently fall back to the deterministic panel.
 **Cause:** the CLI subscription providers shell out to the `claude` / `codex` binaries, but the image was built
-**without** the AI CLIs.
-**Fix:** rebuild with the build arg:
+without the AI CLIs. Official/prebuilt images include them by default; this usually means a custom minimal image was
+built with `INSTALL_AI_CLIS=false`.
+**Fix:** use the official image, or rebuild the custom image with the default AI CLI bundle:
 
 ```bash
-docker compose build --build-arg INSTALL_AI_CLIS=true gittensory
+INSTALL_AI_CLIS=true docker compose build gittensory
 docker compose up -d --force-recreate gittensory
 docker exec gittensory-gittensory-1 sh -c 'which claude && claude --version'
 ```

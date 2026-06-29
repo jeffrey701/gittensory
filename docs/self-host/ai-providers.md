@@ -10,8 +10,8 @@ wrong model, base URL, key, effort, or timeout.
 
 | `AI_PROVIDER`                             | Backend                                                                 | Needs                                                                                   |
 | ----------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `claude-code`                             | Your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); CLI baked in (`INSTALL_AI_CLIS=true`) |
-| `codex`                                   | Your **Codex** subscription via the `codex` CLI                         | local `codex` auth mounted at `/data/codex`, CLI baked in, explicit unsafe opt-in       |
+| `claude-code`                             | Your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); CLI is bundled by default             |
+| `codex`                                   | Your **Codex** subscription via the `codex` CLI                         | local `codex` auth mounted at `/data/codex`; CLI is bundled by default; explicit opt-in |
 | `anthropic`                               | Native **Anthropic API** (BYOK, per-token billing — no weekly limit)    | `ANTHROPIC_API_KEY`, `ANTHROPIC_AI_MODEL`                                               |
 | `ollama` / `openai-compatible` / `openai` | Any OpenAI-compatible `/chat/completions` (+ `/embeddings`)             | provider-specific `*_AI_BASE_URL`, `*_AI_API_KEY`, `*_AI_MODEL`                         |
 

@@ -137,9 +137,11 @@ In `block` mode the combined decision drives the gate; in `advisory` mode it's n
 fail-closed — if a reviewer can't return a usable verdict, the PR is **held** for a human, never auto-merged. The
 free Cloudflare Workers-AI pair remains the cloud default (`consensus`) — these knobs are for self-host providers.
 
-**Subscription CLIs in the image.** The `claude-code` / `codex` providers need their CLI present. Build the
-image with `--build-arg INSTALL_AI_CLIS=true` (or `docker compose build --build-arg INSTALL_AI_CLIS=true`) to
-bake them in, then provide `CLAUDE_CODE_OAUTH_TOKEN` / codex auth at run time. No credentials are baked in.
+**Subscription CLIs in the image.** The official/prebuilt image and the default Compose build include the
+`claude-code` / `codex` provider CLIs. Provider choice and credentials stay runtime-only: set
+`AI_PROVIDER=claude-code`, `AI_PROVIDER=codex`, or a dual pair such as `AI_PROVIDER=claude-code,codex`, then provide
+`CLAUDE_CODE_OAUTH_TOKEN` / codex auth at run time. No credentials are baked in. Set `INSTALL_AI_CLIS=false` only for
+a custom minimal local build that will never use the subscription CLI providers.
 
 - **Claude Code:** set `CLAUDE_CODE_OAUTH_TOKEN` (a 1-year token from `claude setup-token`, run once in a real
   terminal — it's browser-interactive and prints the token; it has no headless mode). The provider forces the

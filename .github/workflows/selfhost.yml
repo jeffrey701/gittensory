@@ -85,6 +85,11 @@ jobs:
             --load \
             -t gittensory:selfhost-ci .
 
+      - name: Smoke-test bundled AI CLIs
+        run: |
+          docker run --rm --entrypoint sh gittensory:selfhost-ci -c \
+            'command -v claude && claude --version && command -v codex && codex --version'
+
       - name: Build release target with visual review deps
         run: |
           docker buildx build \

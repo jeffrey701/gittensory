@@ -29,7 +29,7 @@ services:
     build:
       context: .
       args:
-        INSTALL_AI_CLIS: "${INSTALL_AI_CLIS:-false}"
+        INSTALL_AI_CLIS: "${INSTALL_AI_CLIS:-true}"
         INSTALL_VISUAL_REVIEW: "${INSTALL_VISUAL_REVIEW:-false}"
     restart: unless-stopped
     ports:
