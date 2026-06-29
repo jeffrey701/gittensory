@@ -10,6 +10,7 @@ import type { CombineStrategy, OnMerge } from "../services/ai-review";
 import { isConfiguredSelfHostProvider, resolveConfiguredProviderNames } from "./ai-config";
 export { assertNoLegacySharedAiEnv } from "./ai-config";
 import { incr } from "./metrics";
+import { delimiter } from "node:path";
 
 interface AiRunOptions {
   messages?: Array<{ role: string; content: string }>;
@@ -208,6 +209,28 @@ const SUBSCRIPTION_CLI_ENV_ALLOWLIST = [
   "no_proxy",
 ] as const;
 
+const DEFAULT_SUBSCRIPTION_CLI_BIN_DIR = "/home/node/.npm-global/bin";
+
+function normalizeCliPathDir(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/\/+$/, "");
+}
+
+export function resolveSubscriptionCliPath(parent: Record<string, string | undefined>): string {
+  const prefixBin = normalizeCliPathDir(parent.NPM_CONFIG_PREFIX);
+  const prepend = [prefixBin ? `${prefixBin}/bin` : undefined, DEFAULT_SUBSCRIPTION_CLI_BIN_DIR].filter((v): v is string => Boolean(v));
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const part of [...prepend, ...(parent.PATH ?? "").split(delimiter)]) {
+    const trimmed = part.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    parts.push(trimmed);
+  }
+  return parts.join(delimiter);
+}
+
 export function subscriptionCliEnv(
   parent: Record<string, string | undefined>,
   extra: Record<string, string | undefined> = {},
@@ -220,6 +243,7 @@ export function subscriptionCliEnv(
   for (const [key, value] of Object.entries(extra)) {
     if (value !== undefined) child[key] = value;
   }
+  child.PATH = resolveSubscriptionCliPath(parent);
   return child;
 }
 

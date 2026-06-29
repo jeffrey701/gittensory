@@ -1,8 +1,8 @@
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertNoLegacySharedAiEnv, buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { assertNoLegacySharedAiEnv, buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, resolveSubscriptionCliPath, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
 import { labelSelfHostReviewerModel } from "../../src/selfhost/ai-config";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
@@ -396,11 +396,19 @@ describe("branch coverage — defaults + edge inputs", () => {
 describe("subscriptionCliEnv (allowlist + extra-override arms)", () => {
   it("copies only allowlisted parent vars and drops everything else", () => {
     const child = subscriptionCliEnv({ PATH: "/bin", HOME: "/root", ANTHROPIC_API_KEY: "sk-bill", WORKER_ONLY_VALUE: "internal" });
-    expect(child).toEqual({ PATH: "/bin", HOME: "/root" });
+    expect(child).toEqual({ PATH: resolveSubscriptionCliPath({ PATH: "/bin" }), HOME: "/root" });
+  });
+  it("repairs PATH with the image subscription CLI bin and optional npm prefix", () => {
+    expect(resolveSubscriptionCliPath({ PATH: "/bin" }).split(delimiter).slice(0, 2)).toEqual(["/home/node/.npm-global/bin", "/bin"]);
+    expect(resolveSubscriptionCliPath({ PATH: "/bin", NPM_CONFIG_PREFIX: "/custom/npm/" }).split(delimiter).slice(0, 3)).toEqual([
+      "/custom/npm/bin",
+      "/home/node/.npm-global/bin",
+      "/bin",
+    ]);
   });
   it("merges a defined extra value but skips an undefined one", () => {
     const child = subscriptionCliEnv({ PATH: "/bin" }, { CLAUDE_CODE_OAUTH_TOKEN: "t", UNSET: undefined });
-    expect(child).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "t" }); // UNSET (undefined) skips the extra-loop false arm
+    expect(child).toEqual({ PATH: resolveSubscriptionCliPath({ PATH: "/bin" }), CLAUDE_CODE_OAUTH_TOKEN: "t" }); // UNSET (undefined) skips the extra-loop false arm
   });
 });
 
@@ -498,7 +506,7 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(seen).not.toContain("--ask-for-approval");
     expect(seen).not.toContain("x");
     expect(capturedInput).toBe("x");
-    expect(capturedEnv).toEqual({ PATH: "/bin" });
+    expect(capturedEnv).toEqual({ PATH: resolveSubscriptionCliPath({ PATH: "/bin" }) });
     expect(capturedCwd).toContain("gittensory-ai-");
     expect(timeout).toBe(300_000);
     // Provider-specific model/effort are passed through.

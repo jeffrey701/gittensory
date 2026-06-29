@@ -18,6 +18,7 @@ import {
   createSelfHostAi,
   resolveAiReviewerPlan,
   resolveRequiredCliProviders,
+  resolveSubscriptionCliPath,
 } from "./selfhost/ai";
 import {
   cookieValue,
@@ -339,7 +340,7 @@ async function main(): Promise<void> {
   // Fail-LOUD preflight (#1566): a CLI-subscription provider (claude-code/codex) reviews by spawning the CLI as a
   // subprocess; if the binary is absent (image built without INSTALL_AI_CLIS=true) the spawn ENOENTs and EVERY AI
   // review silently degrades to "no usable output". Shout at boot so the misconfig is obvious, never invisible.
-  const pathDirs = (process.env.PATH ?? "").split(delimiter);
+  const pathDirs = resolveSubscriptionCliPath(process.env).split(delimiter);
   for (const { provider, cli } of resolveRequiredCliProviders(process.env)) {
     if (pathDirs.some((d) => d && existsSync(join(d, cli)))) continue;
     console.error(
