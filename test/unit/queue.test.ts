@@ -1527,6 +1527,90 @@ describe("queue processors", () => {
     expect(audit?.n).toBe(0);
   });
 
+  it("publishes deterministic surface and reports missing summary when required AI is over quota", async () => {
+    const aiRun = vi.fn(async () => ({ response: "{}" }));
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      AI: { run: aiRun } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "0",
+    });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertInstallation(env, { action: "created", installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "block",
+      gatePack: "oss-anti-slop",
+    });
+    await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 49, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a49" }, labels: [], body: "Closes #1" });
+    const commentBodies: string[] = [];
+    const captureSpy = vi.spyOn(sentryModule, "captureReviewFailure");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/49/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/49")) return Response.json({ number: 49, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a49" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+      if (url.includes("/commits/a49/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a49/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/49/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/49/comments") && method === "POST") {
+        commentBodies.push(String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""));
+        return Response.json({ id: 49 }, { status: 201 });
+      }
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await expect(
+      processJob(env, {
+        type: "agent-regate-pr",
+        deliveryId: "regate-ai-over-quota",
+        repoFullName: "JSONbored/gittensory",
+        prNumber: 49,
+        installationId: 123,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(aiRun).not.toHaveBeenCalled();
+    expect(commentBodies.length).toBeGreaterThanOrEqual(2);
+    const finalComment = commentBodies.find((body) => !body.includes("is reviewing"));
+    expect(finalComment).toContain("Readiness score");
+    expect(finalComment).not.toContain("AI review returned public review text");
+    const audit = await env.DB.prepare("select event_type, metadata_json from audit_events where event_type = ?")
+      .bind("github_app.ai_review_public_summary_missing")
+      .first<{ event_type: string; metadata_json: string }>();
+    expect(audit).toMatchObject({ event_type: "github_app.ai_review_public_summary_missing" });
+    expect(audit?.metadata_json).toContain('"aiReviewMode":"block"');
+    expect(captureSpy).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        reason: "ai_review_public_summary_missing",
+        repo: "JSONbored/gittensory",
+        pr: 49,
+        reviewer_count: 0,
+        public_notes: false,
+      }),
+    );
+    captureSpy.mockRestore();
+  });
+
   it("agent re-gate sweep re-reviews each stale open PR (installation id) and swallows a failing re-review", async () => {
     const env = createTestEnv({});
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
