@@ -124,10 +124,12 @@ export function createSqliteQueue(
     );
   // Recover jobs a crashed previous run left mid-flight → make them claimable again.
   const recovered = recoverProcessingJobs(driver);
-  if (recovered)
+  if (recovered) {
+    recordQueueMetric(driver, "gittensory_jobs_recovered_total", recovered);
     console.log(
       JSON.stringify({ event: "selfhost_queue_recovered", count: recovered }),
     );
+  }
   const spread = spreadDueJobsOnStartup(driver);
   if (spread)
     console.log(

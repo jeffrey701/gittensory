@@ -111,10 +111,12 @@ export function createPgQueue(
         }),
       );
     const recovered = await recoverProcessingJobs();
-    if (recovered)
+    if (recovered) {
+      await recordQueueMetric("gittensory_jobs_recovered_total", recovered);
       console.log(
         JSON.stringify({ event: "selfhost_queue_recovered", count: recovered }),
       );
+    }
     const spread = await spreadDueJobsOnStartup();
     if (spread)
       console.log(
