@@ -52,6 +52,7 @@ const REVIEW_SYSTEM_PROMPT = [
   "Respond with ONLY a JSON object of this exact shape (no prose, no code fence):",
   '{"assessment": string, "blockers": string[], "nits": string[], "suggestions": string[], "confidence": number}',
   "- assessment: a substantive but CONCISE summary (2-4 sentences) — what the change does, whether it is correct, and the most notable detail. Specific to THIS diff; never a generic one-liner and never hedging ('appears to', 'seems to').",
+  "The assessment field is REQUIRED and must never be empty; if blockers is [] then the assessment still summarizes why the visible diff is safe enough to proceed.",
   "- blockers: each ONE sentence naming a defect that WILL break the code as written — a missing import/symbol (ReferenceError), a logic error that produces wrong output, a security hole, data loss, a build/test breakage, or an API/contract break. Reference the file (and function/line). Empty [] if there are genuinely none.",
   "- confidence: a single number in [0,1] — your CALIBRATED probability that the blockers above are REAL, must-fix defects (not false positives). Use 1.0 only when you are certain the diff itself breaks; use 0.5 for a genuine coin-flip; lower it when you cannot fully see the breaking code or the defect is speculative. When blockers is empty, set confidence to 1.0.",
   "- nits: each ONE sentence — a NON-blocking point: style, naming, a missing doc, or DEFENSIVE hardening ('should handle the empty case', 'consider catching errors', 'add validation'). File-reference where you can.",
@@ -694,6 +695,17 @@ export function hasPublicReviewAssessment(
   return extractPublicAssessment(notes).length > 0;
 }
 
+function fallbackPublicAssessment(
+  safeBlockers: readonly string[],
+  safeNits: readonly string[],
+): string | null {
+  if (safeBlockers.length > 0)
+    return "The AI review returned blocking findings for this change but did not include a separate narrative summary. Review the blockers below before deciding this PR.";
+  if (safeNits.length > 0)
+    return "The AI review returned non-blocking notes for this change but did not include a separate narrative summary. Review the nits below before deciding this PR.";
+  return null;
+}
+
 /** Compose a public-safe markdown advisory blurb from one or two model reviews. Null if no assessment is safe. */
 export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
   const assessments = reviews.map((r) => r.assessment).filter(Boolean);
@@ -711,9 +723,11 @@ export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
   const safeNits = nits
     .map((s) => toPublicSafe(s))
     .filter((s): s is string => Boolean(s));
-  if (!assessment) return null;
+  const publicAssessment =
+    assessment || fallbackPublicAssessment(safeBlockers, safeNits);
+  if (!publicAssessment) return null;
   const lines: string[] = [];
-  lines.push(assessment, "");
+  lines.push(publicAssessment, "");
   if (safeBlockers.length > 0) {
     lines.push("**Blockers**");
     lines.push(...safeBlockers.map((s) => `- ${s}`));

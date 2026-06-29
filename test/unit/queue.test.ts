@@ -1350,7 +1350,7 @@ describe("queue processors", () => {
     expect(postedBodies[0]).toContain("🟪");
   });
 
-  it("publishes the final PR surface when AI review produces nits but no public summary", async () => {
+  it("publishes AI notes when the review omits a narrative assessment", async () => {
     let aiCalls = 0;
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
@@ -1441,22 +1441,17 @@ describe("queue processors", () => {
     expect(finalComment).toBeDefined();
     expect(finalComment).toContain("Readiness score");
     expect(finalComment).not.toContain("stale cached nit");
-    expect(finalComment).not.toContain("Add coverage for the new branch.");
+    expect(finalComment).toContain("did not include a separate narrative summary");
+    expect(finalComment).toContain("Add coverage for the new branch.");
     expect(aiCalls).toBeGreaterThan(0);
     expect(checkPatches).toContainEqual(expect.objectContaining({ status: "completed" }));
     const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
       .bind("github_app.ai_review_public_summary_missing")
       .first<{ n: number }>();
-    expect(audit?.n).toBe(1);
+    expect(audit?.n).toBe(0);
   });
 
-  it("publishes a deterministic re-gate result when AI review produces no public summary and audit storage fails", async () => {
-    const originalRecordAuditEvent = repositoriesModule.recordAuditEvent;
-    const auditSpy = vi.spyOn(repositoriesModule, "recordAuditEvent").mockImplementation(async (auditEnv, event) => {
-      if (event.eventType === "github_app.ai_review_public_summary_missing")
-        throw new Error("D1 audit failed");
-      await originalRecordAuditEvent(auditEnv, event);
-    });
+  it("publishes a non-cacheable AI-unavailable note when no reviewer returns usable output", async () => {
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
       AI: {
@@ -1510,7 +1505,7 @@ describe("queue processors", () => {
     await expect(
       processJob(env, {
         type: "agent-regate-pr",
-        deliveryId: "regate-ai-summary-missing-audit-fails",
+        deliveryId: "regate-ai-unavailable",
         repoFullName: "JSONbored/gittensory",
         prNumber: 48,
         installationId: 123,
@@ -1519,12 +1514,16 @@ describe("queue processors", () => {
 
     expect(commentBodies.length).toBeGreaterThanOrEqual(2);
     expect(commentBodies[0]).toContain("is reviewing");
-    expect(commentBodies.some((body) => !body.includes("is reviewing"))).toBe(true);
-    expect(auditSpy).toHaveBeenCalledWith(
-      env,
-      expect.objectContaining({ eventType: "github_app.ai_review_public_summary_missing" }),
-    );
-    auditSpy.mockRestore();
+    const finalComment = commentBodies.find((body) => !body.includes("is reviewing"));
+    expect(finalComment).toContain("AI review could not be completed for this PR head");
+    const cached = await env.DB.prepare("select count(*) as n from ai_review_cache where repo_full_name = ? and pull_number = ?")
+      .bind("JSONbored/gittensory", 48)
+      .first<{ n: number }>();
+    expect(cached?.n).toBe(0);
+    const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
+      .bind("github_app.ai_review_public_summary_missing")
+      .first<{ n: number }>();
+    expect(audit?.n).toBe(0);
   });
 
   it("agent re-gate sweep re-reviews each stale open PR (installation id) and swallows a failing re-review", async () => {

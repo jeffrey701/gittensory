@@ -3647,6 +3647,7 @@ export async function runAiReviewForAdvisory(
       reviewerCount: number;
       inlineFindings: InlineFinding[];
       findings: AdvisoryFinding[];
+      cacheable?: boolean | undefined;
     }
   | undefined
 > {
@@ -3875,14 +3876,25 @@ export async function runAiReviewForAdvisory(
       });
     }
     args.advisory.findings.push(...findings);
-    return hasPublicReviewAssessment(result.advisoryNotes)
-      ? {
-          notes: result.advisoryNotes ?? "",
-          reviewerCount: result.reviewerCount,
-          inlineFindings: result.inlineFindings,
-          findings,
-        }
-      : undefined;
+    if (hasPublicReviewAssessment(result.advisoryNotes)) {
+      return {
+        notes: result.advisoryNotes ?? "",
+        reviewerCount: result.reviewerCount,
+        inlineFindings: result.inlineFindings,
+        findings,
+      };
+    }
+    if (result.inconclusive) {
+      return {
+        notes:
+          "AI review could not be completed for this PR head. Gittensory is holding this PR for manual review instead of relying on deterministic signals alone.",
+        reviewerCount: result.reviewerCount,
+        inlineFindings: [],
+        findings,
+        cacheable: false,
+      };
+    }
+    return undefined;
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -4356,6 +4368,7 @@ async function maybePublishPrPublicSurface(
         reviewerCount: number;
         inlineFindings?: InlineFinding[];
         findings?: AdvisoryFinding[];
+        cacheable?: boolean | undefined;
       }
     | undefined;
   let inlineCommentsEnabledForReview = false;
@@ -4683,7 +4696,7 @@ async function maybePublishPrPublicSurface(
           reviewExcludePaths,
           reviewInlineComments,
         });
-        if (aiReview)
+        if (aiReview && aiReview.cacheable !== false)
           await putCachedAiReview(
             env,
             repoFullName,

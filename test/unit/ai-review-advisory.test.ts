@@ -464,7 +464,7 @@ describe("runAiReviewForAdvisory", () => {
     expect(result).toBeUndefined();
   });
 
-  it("returns undefined when the model produces nits but no assessment summary", async () => {
+  it("preserves model nits when the model omits the assessment summary", async () => {
     const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: nitsWithoutAssessmentJson() })), {
       settings: { aiReviewMode: "advisory" } as RepositorySettings,
       advisory: advisory(),
@@ -473,7 +473,8 @@ describe("runAiReviewForAdvisory", () => {
       author: "alice",
       confirmedContributor: true,
     });
-    expect(result).toBeUndefined();
+    expect(result?.notes).toContain("did not include a separate narrative summary");
+    expect(result?.notes).toContain("Add a test.");
   });
 
   it("does not use the maintainer's BYOK key for non-confirmed oss-anti-slop blocking reviews", async () => {

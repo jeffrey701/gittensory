@@ -1236,7 +1236,7 @@ describe("pure helpers", () => {
     expect(result.status).toBe("ok");
   });
 
-  it("composeAdvisoryNotes returns null when no assessment is public-safe", () => {
+  it("composeAdvisoryNotes returns null when no assessment or finding is public-safe", () => {
     expect(
       composeAdvisoryNotes([
         {
@@ -1249,18 +1249,36 @@ describe("pure helpers", () => {
         },
       ]),
     ).toBeNull();
-    expect(
-      composeAdvisoryNotes([
-        {
-          assessment: "",
-          suggestions: ["Add a test."],
-          nits: ["Rename the helper."],
-          blockers: ["Null deref in src/a.ts."],
-          inlineFindings: [],
-          confidence: 1,
-        },
-      ]),
-    ).toBeNull();
+  });
+
+  it("composeAdvisoryNotes preserves blockers and nits when the model omits a narrative assessment", () => {
+    const withBlocker = composeAdvisoryNotes([
+      {
+        assessment: "",
+        suggestions: [],
+        nits: [],
+        blockers: ["Null deref in src/a.ts."],
+        inlineFindings: [],
+        confidence: 1,
+      },
+    ]);
+    expect(withBlocker).toContain("blocking findings");
+    expect(withBlocker).toContain("**Blockers**");
+    expect(withBlocker).toContain("Null deref in src/a.ts.");
+
+    const withNits = composeAdvisoryNotes([
+      {
+        assessment: "",
+        suggestions: ["Add coverage for the edge case."],
+        nits: ["Rename the helper."],
+        blockers: [],
+        inlineFindings: [],
+        confidence: 1,
+      },
+    ]);
+    expect(withNits).toContain("non-blocking notes");
+    expect(withNits).toContain("**Nits (2)**");
+    expect(withNits).toContain("Add coverage for the edge case.");
   });
 
   it("parseModelReview parses well-formed inline findings; severity defaults to nit unless exactly 'blocker' (#inline-comments)", () => {
@@ -1462,11 +1480,11 @@ describe("pure helpers", () => {
       review({ assessment: "Looks good." }),
     ]);
     expect(assessmentOnly).toBe("Looks good.");
-    expect(composeAdvisoryNotes([review({ nits: ["Add a test."] })])).toBeNull();
+    expect(composeAdvisoryNotes([review({ nits: ["Add a test."] })])).toContain("Add a test.");
     const blockersOnly = composeAdvisoryNotes([
       review({ blockers: ["Null deref in src/a.ts."] }),
     ]);
-    expect(blockersOnly).toBeNull();
+    expect(blockersOnly).toContain("Null deref in src/a.ts.");
   });
 
   it("composeAdvisoryNotes merges + dedupes blockers/nits across two reviewers and renders both sections", () => {
