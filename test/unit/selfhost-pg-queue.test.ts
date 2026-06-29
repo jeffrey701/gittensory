@@ -34,7 +34,7 @@ interface MockPool {
   fn: MockFn;
   enqueueResult(r: Partial<QueryResult>): void;
   /** Pre-load a job to be returned by the next RETURNING claim query. */
-  enqueueJob(id: string, payload: object, attempts?: number): void;
+  enqueueJob(id: string, payload: object, attempts?: number, jobKey?: string | null): void;
 }
 
 function makePool(): MockPool {
@@ -56,8 +56,8 @@ function makePool(): MockPool {
     pool: { query: fn } as unknown as Pool,
     fn: fn as unknown as MockFn,
     enqueueResult(r) { results.push(r); },
-    enqueueJob(id, payload, attempts = 0) {
-      results.push({ rows: [{ id, payload: JSON.stringify(payload), attempts }], rowCount: 1 });
+    enqueueJob(id, payload, attempts = 0, jobKey = null) {
+      results.push({ rows: [{ id, payload: JSON.stringify(payload), attempts, job_key: jobKey }], rowCount: 1 });
     },
   };
 }
@@ -110,6 +110,99 @@ describe("createPgQueue (durable #977)", () => {
     expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [9, "a"]);
     expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [0, "b"]);
     expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [8, "c"]);
+  });
+
+  it("init() backfills job keys, recovers crashed jobs, and spreads due startup backlog", async () => {
+    const oldMin = process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+    const oldJitter = process.env.QUEUE_STARTUP_JITTER_MS;
+    const oldRecoveryJitter = process.env.QUEUE_RECOVERY_JITTER_MS;
+    process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = "2";
+    process.env.QUEUE_STARTUP_JITTER_MS = "60000";
+    process.env.QUEUE_RECOVERY_JITTER_MS = "0";
+    try {
+      const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+        const q = String(sql);
+        if (q.includes("SELECT id, payload, priority")) return { rows: [], rowCount: 0 };
+        if (q.includes("SELECT id, payload, job_key") && q.includes("status IN")) {
+          return { rows: [{ id: "keyed", payload: JSON.stringify(ciWebhook("ci-1")), job_key: null }], rowCount: 1 };
+        }
+        if (q.includes("UPDATE _selfhost_jobs SET job_key=$1")) return { rows: [], rowCount: 1 };
+        if (q.includes("WHERE status='processing'")) {
+          return { rows: [{ id: "recover", payload: JSON.stringify(msg("stuck")), job_key: "recover-key" }], rowCount: 1 };
+        }
+        if (q.includes("SET status='pending', run_after=$1 WHERE id=$2")) return { rows: [], rowCount: 1 };
+        if (q.includes("WHERE status='pending' AND run_after<=$1")) {
+          return {
+            rows: [
+              { id: "spread-a", payload: JSON.stringify(msg("a")), job_key: "spread-a" },
+              { id: "spread-b", payload: JSON.stringify(msg("b")), job_key: "spread-b" },
+            ],
+            rowCount: 2,
+          };
+        }
+        if (q.includes("UPDATE _selfhost_jobs SET run_after=$1 WHERE id=$2")) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      });
+      const q = createPgQueue({ query: fn } as unknown as Pool, async () => undefined);
+
+      await q.init();
+
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE _selfhost_jobs SET job_key=$1"),
+        [`github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`, "keyed"],
+      );
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("SET status='pending', run_after=$1 WHERE id=$2"),
+        expect.arrayContaining([expect.any(Number), "recover"]),
+      );
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE _selfhost_jobs SET run_after=$1 WHERE id=$2"),
+        expect.arrayContaining([expect.any(Number), "spread-a"]),
+      );
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE _selfhost_jobs SET run_after=$1 WHERE id=$2"),
+        expect.arrayContaining([expect.any(Number), "spread-b"]),
+      );
+    } finally {
+      if (oldMin === undefined) delete process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+      else process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = oldMin;
+      if (oldJitter === undefined) delete process.env.QUEUE_STARTUP_JITTER_MS;
+      else process.env.QUEUE_STARTUP_JITTER_MS = oldJitter;
+      if (oldRecoveryJitter === undefined) delete process.env.QUEUE_RECOVERY_JITTER_MS;
+      else process.env.QUEUE_RECOVERY_JITTER_MS = oldRecoveryJitter;
+    }
+  });
+
+  it("init() skips startup spread when jitter is disabled", async () => {
+    const oldMin = process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+    const oldJitter = process.env.QUEUE_STARTUP_JITTER_MS;
+    process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = "1";
+    process.env.QUEUE_STARTUP_JITTER_MS = "0";
+    try {
+      const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+        const q = String(sql);
+        if (q.includes("SELECT id, payload, priority")) return { rows: [], rowCount: 0 };
+        if (q.includes("SELECT id, payload, job_key") && q.includes("status IN")) return { rows: [], rowCount: 0 };
+        if (q.includes("WHERE status='processing'")) return { rows: [], rowCount: 0 };
+        if (q.includes("WHERE status='pending' AND run_after<=$1")) {
+          return { rows: [{ id: "due", payload: JSON.stringify(msg("due")), job_key: "due" }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+      const q = createPgQueue({ query: fn } as unknown as Pool, async () => undefined);
+
+      await q.init();
+
+      expect(fn).not.toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE _selfhost_jobs SET run_after=$1 WHERE id=$2"),
+        expect.anything(),
+      );
+    } finally {
+      if (oldMin === undefined) delete process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+      else process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = oldMin;
+      if (oldJitter === undefined) delete process.env.QUEUE_STARTUP_JITTER_MS;
+      else process.env.QUEUE_STARTUP_JITTER_MS = oldJitter;
+    }
   });
 
   it("coalesces duplicate keyed jobs instead of inserting queue pressure", async () => {
@@ -193,6 +286,78 @@ describe("createPgQueue (durable #977)", () => {
       expect.stringContaining("status='dead'"),
       expect.anything(),
     );
+  });
+
+  it("defers due jobs and coalesces a keyed rate-limit retry into the pending duplicate", async () => {
+    const oldJitter = process.env.QUEUE_STARTUP_JITTER_MS;
+    process.env.QUEUE_STARTUP_JITTER_MS = "0";
+    const rateLimit = new Error("API rate limit exceeded for installation ID 123");
+    Object.assign(rateLimit, {
+      status: 403,
+      response: { headers: { "retry-after": "120" } },
+    });
+    const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+      const q = String(sql);
+      if (q.includes("SELECT id, payload, priority")) return { rows: [], rowCount: 0 };
+      if (q.includes("SELECT id, payload, job_key") && q.includes("status IN")) return { rows: [], rowCount: 0 };
+      if (q.includes("WHERE status='processing'")) return { rows: [], rowCount: 0 };
+      if (q.includes("UPDATE _selfhost_jobs SET status='processing'")) {
+        return {
+          rows: [{
+            id: "active",
+            payload: JSON.stringify({ type: "github-webhook" }),
+            attempts: 0,
+            job_key: "github-webhook:ci-completed:jsonbored/gittensory@abc1234#7",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (q.includes("SELECT id, payload, job_key FROM _selfhost_jobs WHERE status='pending' AND run_after<=$1")) {
+        return {
+          rows: [{ id: "pending-due", payload: JSON.stringify(msg("agent-regate-pr")), job_key: "agent-regate-pr:jsonbored/gittensory#9" }],
+          rowCount: 1,
+        };
+      }
+      if (q.includes("SELECT id FROM _selfhost_jobs WHERE status='pending' AND job_key=$1 AND id<>$2")) {
+        return { rows: [{ id: "existing" }], rowCount: 1 };
+      }
+      if (q.includes("SELECT id FROM _selfhost_jobs WHERE status='pending' AND job_key=$1 ORDER BY")) {
+        return { rows: [], rowCount: 0 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    try {
+      const q = createPgQueue(
+        { query: fn } as unknown as Pool,
+        async () => {
+          throw rateLimit;
+        },
+        { maxRetries: 1, backoffMs: () => 0 },
+      );
+      await q.init();
+      await q.drain();
+      await q.binding.send(ciWebhook("after-cooldown"), { delaySeconds: 0 });
+
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=COALESCE"),
+        expect.arrayContaining([expect.any(Number), "github rate-limit cooldown", "pending-due"]),
+      );
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=$2"),
+        expect.arrayContaining([expect.any(Number), "API rate limit exceeded for installation ID 123", "existing"]),
+      );
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
+        ["active"],
+      );
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("INSERT INTO _selfhost_jobs (payload"),
+        expect.arrayContaining([expect.stringContaining('"deliveryId":"after-cooldown"'), expect.any(Number)]),
+      );
+    } finally {
+      if (oldJitter === undefined) delete process.env.QUEUE_STARTUP_JITTER_MS;
+      else process.env.QUEUE_STARTUP_JITTER_MS = oldJitter;
+    }
   });
 
   it("opens a shared cooldown after GitHub rate limits so the pump does not claim the next due job", async () => {
@@ -431,7 +596,16 @@ describe("createPgQueue (durable #977)", () => {
     const m = makePool();
     const q = createPgQueue(m.pool, async () => undefined);
     await q.init();
-    m.fn.mockResolvedValueOnce({ rows: [{ name: "gittensory_jobs_processed_total", value: "42" }], rowCount: 1 });
-    await expect(q.stats()).resolves.toEqual({ gittensory_jobs_processed_total: 42 });
+    m.fn.mockResolvedValueOnce({
+      rows: [
+        { name: "gittensory_jobs_processed_total", value: "42" },
+        { name: "gittensory_jobs_dead_total", value: null },
+      ],
+      rowCount: 2,
+    });
+    await expect(q.stats()).resolves.toEqual({
+      gittensory_jobs_processed_total: 42,
+      gittensory_jobs_dead_total: 0,
+    });
   });
 });

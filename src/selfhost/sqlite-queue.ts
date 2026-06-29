@@ -288,7 +288,7 @@ export function createSqliteQueue(
               );
             }
           }
-          if (job.job_key && mergeRescheduledJobIntoPending(driver, job, retryAfter, errMsg)) {
+          if (job.job_key && mergeRescheduledJobIntoPending(driver, job as JobRow & { job_key: string }, retryAfter, errMsg)) {
             recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
           } else {
             driver.query(
@@ -567,11 +567,10 @@ function reclaimExpiredProcessingJobs(
 
 function mergeRescheduledJobIntoPending(
   driver: SqliteDriver,
-  job: JobRow,
+  job: JobRow & { job_key: string },
   runAfter: number,
   errMsg: string,
 ): boolean {
-  if (!job.job_key) return false;
   const existing = driver.query(
     `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=? AND id<>? ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
     [job.job_key, job.id],

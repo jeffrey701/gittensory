@@ -441,6 +441,44 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(row.last_error).toContain("AI review did not produce");
   });
 
+  it("coalesces a keyed retryable review job into an existing pending duplicate", async () => {
+    const driver = makeDriver();
+    const retryable = new RetryableJobError("AI review did not produce a public summary yet", {
+      retryAfterMs: 5_000,
+      retryKind: "ai_review_public_summary_missing",
+    });
+    const key = `github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`;
+    const q = createSqliteQueue(
+      driver,
+      async () => {
+        throw retryable;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
+      [JSON.stringify(ciWebhook("ci-active")), key],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, ?, 0, 10, ?)",
+      [JSON.stringify(ciWebhook("ci-existing")), Date.now() + 60_000, key],
+    );
+
+    await q.drain();
+
+    const rows = driver.query(
+      "SELECT payload, last_error FROM _selfhost_jobs ORDER BY id",
+      [],
+    ).rows as Array<{ payload: string; last_error: string | null }>;
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]!.payload).deliveryId).toBe("ci-existing");
+    expect(rows[0]!.last_error).toContain("AI review did not produce");
+    expect(q.stats()).toMatchObject({
+      gittensory_jobs_coalesced_total: 1,
+      gittensory_jobs_deferred_total: 1,
+    });
+  });
+
   it("SURVIVES A RESTART: a fresh queue over the same DB processes a persisted pending job", async () => {
     const driver = makeDriver();
     const seen: string[] = [];

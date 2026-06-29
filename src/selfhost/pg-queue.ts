@@ -339,7 +339,7 @@ export function createPgQueue(
               );
             }
           }
-          if (job.job_key && (await mergeRescheduledJobIntoPending(job, retryAfter, errMsg))) {
+          if (job.job_key && (await mergeRescheduledJobIntoPending(job as JobRow & { job_key: string }, retryAfter, errMsg))) {
             await recordQueueMetric("gittensory_jobs_coalesced_total");
           } else {
             await pool.query(
@@ -537,11 +537,10 @@ export function createPgQueue(
   }
 
   async function mergeRescheduledJobIntoPending(
-    job: JobRow,
+    job: JobRow & { job_key: string },
     runAfter: number,
     errMsg: string,
   ): Promise<boolean> {
-    if (!job.job_key) return false;
     const existing = (
       await pool.query(
         `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=$1 AND id<>$2 ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
