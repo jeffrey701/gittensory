@@ -7440,7 +7440,7 @@ describe("queue processors", () => {
       labels: [],
       body: "Validation: npm test",
     });
-    const seen = { staleCheckGets: 0, liveCheckGets: 0 };
+    const seen = { staleCheckGets: 0, liveCheckGets: 0, liveLegacyCheckGets: 0 };
     const patchBodies: Array<{ conclusion?: string }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -7454,6 +7454,11 @@ describe("queue processors", () => {
         return Response.json({ total_count: 0, check_runs: [] });
       }
       if (url.includes("/commits/live-sha/check-runs") && method === "GET") {
+        const checkName = new URL(url).searchParams.get("check_name");
+        if (checkName === "Gittensory Gate") {
+          seen.liveLegacyCheckGets += 1;
+          return Response.json({ total_count: 0, check_runs: [] });
+        }
         seen.liveCheckGets += 1;
         return Response.json({ total_count: 1, check_runs: [{ id: 556, name: "Gittensory Orb Review Agent" }] });
       }
@@ -7482,6 +7487,7 @@ describe("queue processors", () => {
 
     // The neutral PATCH targeted the LIVE head's Gate run (id 556), and the stale SHA was never touched.
     expect(seen.liveCheckGets).toBe(1);
+    expect(seen.liveLegacyCheckGets).toBe(1);
     expect(seen.staleCheckGets).toBe(0);
     expect(patchBodies[0]?.conclusion).toBe("neutral");
     const audit = await env.DB.prepare("select metadata_json from audit_events where event_type = ?")

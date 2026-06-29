@@ -21,6 +21,7 @@ import {
 import {
   GITTENSORY_CONTEXT_CHECK_NAME,
   GITTENSORY_GATE_CHECK_NAME,
+  GITTENSORY_LEGACY_GATE_CHECK_NAME,
 } from "../review/check-names";
 
 export {
@@ -530,6 +531,7 @@ export async function createOrUpdateGateCheckRun(
       conclusion: gate.conclusion,
       output: formatGateCheckOutput(gate),
       checkRunId: options.checkRunId,
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -557,6 +559,7 @@ export async function createOrUpdatePendingGateCheckRun(
         text: "The review agent blocks every author on the repo's configured hard blockers (duplicate PRs by default); on everything else, and while state is still syncing, it stays advisory.",
       },
       updateExisting: "in_progress_only",
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -584,6 +587,7 @@ export async function createOrUpdateSkippedGateCheckRun(
         summary: reason,
         text: "Gittensory does not post late first comments on closed or merged pull requests.",
       },
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -620,6 +624,7 @@ export async function createOrUpdateErroredGateCheckRun(
         text: "Gittensory finalizes the review-agent check to a neutral, non-blocking state when evaluation is interrupted, so the check never hangs in_progress. Push a new commit or use the 'Re-run Gittensory review' checkbox to re-evaluate.",
       },
       checkRunId: options.checkRunId,
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -655,6 +660,7 @@ export async function createOrUpdateOverriddenGateCheckRun(
         text: `Overridden by @${options.actor}: ${options.reason}`,
       },
       checkRunId: options.checkRunId,
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -672,6 +678,7 @@ async function createOrUpdateNamedCheckRun(
     output: CheckRunOutput;
     checkRunId?: number | undefined;
     updateExisting?: "any" | "in_progress_only" | "never" | undefined;
+    supersedeLegacyNames?: readonly string[] | undefined;
     mode?: AgentActionMode | undefined;
   },
 ): Promise<CheckRunOutcome | null> {
@@ -740,11 +747,70 @@ async function createOrUpdateNamedCheckRun(
         return null;
       }
     };
+    const finalizeLegacyPendingCheckRuns = async (): Promise<void> => {
+      const legacyNames = check.supersedeLegacyNames ?? [];
+      if (legacyNames.length === 0 || check.checkRunId) return;
+      for (const legacyName of legacyNames) {
+        try {
+          const existing = await octokit.request(
+            "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+            {
+              owner,
+              repo,
+              ref: headSha,
+              check_name: legacyName,
+              filter: "latest",
+              per_page: 1,
+            },
+          );
+          const legacyRun = (existing.data as CheckRunListResponse)
+            .check_runs?.[0];
+          if (
+            !legacyRun ||
+            (legacyRun.name && legacyRun.name !== legacyName) ||
+            (legacyRun.status ?? "").toLowerCase() === "completed"
+          )
+            continue;
+          await octokit.request(
+            "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}",
+            {
+              owner,
+              repo,
+              check_run_id: legacyRun.id,
+              name: legacyName,
+              status: "completed",
+              conclusion: "neutral",
+              output: outputForCheckRunUpdate({
+                title: `${GITTENSORY_GATE_CHECK_NAME} superseded this legacy check`,
+                summary:
+                  "This legacy check name was completed after the review-agent check was renamed.",
+                text: `Use ${GITTENSORY_GATE_CHECK_NAME} for current Gittensory review results.`,
+              }),
+              ...detailsUrlBody,
+            },
+          );
+        } catch (error) {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "legacy_gate_check_finalize_failed",
+              repository: `${owner}/${repo}`,
+              legacyName,
+              error: errorMessage(error),
+            }),
+          );
+        }
+      }
+    };
+    const finish = async (outcome: CheckRunOutcome): Promise<CheckRunOutcome> => {
+      await finalizeLegacyPendingCheckRuns();
+      return outcome;
+    };
 
     try {
       if (check.checkRunId) {
         const out = await patchCheckRun(check.checkRunId);
-        if (out) return out;
+        if (out) return await finish(out);
       } else if (check.updateExisting !== "never") {
         const existing = await octokit.request(
           "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
@@ -765,10 +831,10 @@ async function createOrUpdateNamedCheckRun(
             (existingCheckRun.status ?? "").toLowerCase() !== "completed")
         ) {
           const out = await patchCheckRun(existingCheckRun.id);
-          if (out) return out;
+          if (out) return await finish(out);
         }
       }
-      return await postNewCheckRun();
+      return await finish(await postNewCheckRun());
     } catch (error) {
       if (isCheckRunPermissionError(error)) {
         // Capture the ACTUAL response (status + body). A 403 here is often NOT a real permission gap (the App has
