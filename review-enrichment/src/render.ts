@@ -34,6 +34,12 @@ function promptText(value: string): string {
     .replace(/([*_{}[\]()#+.!|-])/g, "\\$1");
 }
 
+function formatBytes(n: number): string {
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MiB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KiB`;
+  return `${n} B`;
+}
+
 /** Build the `promptSection` (verbatim splice) + a one-line `systemSuffix` from the findings. Empty when nothing found. */
 export function renderBrief(
   findings: BriefFindings,
@@ -52,9 +58,32 @@ export function renderBrief(
           (SEVERITY_RANK[b.cve.severity] ?? 4),
       );
     for (const { dep, cve } of flat) {
-      const fix = cve.fixedIn ? ` — fixed in ${cve.fixedIn}` : "";
+      const fix = cve.fixedIn
+        ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}`
+        : "";
       lines.push(
-        `- \`${dep.package}@${dep.to}\` (${dep.ecosystem}): **${cve.severity}** ${cve.id} — ${cve.summary}${fix}`,
+        `- ${safeCodeSpan(`${dep.package}@${dep.to}`)} (${dep.ecosystem}): **${cve.severity}** ${safeCodeSpan(cve.id)} — ${promptText(cve.summary)}${fix}`,
+      );
+    }
+  }
+
+  const lockfileDrift = findings.lockfileDrift ?? [];
+  if (lockfileDrift.length) {
+    lines.push("### Vulnerable lockfile-only dependency drift (OSV.dev)");
+    const flat = lockfileDrift
+      .flatMap((dep) => dep.cves.map((cve) => ({ dep, cve })))
+      .sort(
+        (a, b) =>
+          (SEVERITY_RANK[a.cve.severity] ?? 4) -
+          (SEVERITY_RANK[b.cve.severity] ?? 4),
+      );
+    for (const { dep, cve } of flat) {
+      const from = dep.from ? ` from ${safeCodeSpan(dep.from)}` : "";
+      const fix = cve.fixedIn
+        ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}`
+        : "";
+      lines.push(
+        `- ${safeCodeSpan(`${dep.file}:${dep.line}`)} resolves transitive ${safeCodeSpan(`${dep.package}@${dep.to}`)} (${dep.ecosystem})${from}: **${cve.severity}** ${safeCodeSpan(cve.id)} — ${promptText(cve.summary)}${fix}`,
       );
     }
   }
@@ -129,6 +158,41 @@ export function renderBrief(
     }
   }
 
+  const provenance = findings.provenance ?? [];
+  if (provenance.length) {
+    const noAttest = provenance.filter((f) => f.kind === "no-attestation");
+    const binaries = provenance.filter((f) => f.kind === "binary");
+    const vendored = provenance.filter((f) => f.kind === "vendored");
+    if (noAttest.length) {
+      lines.push(
+        "### Dependencies without provenance attestation (supply-chain integrity risk)",
+      );
+      for (const f of noAttest) {
+        lines.push(
+          `- ${safeCodeSpan(`${f.package!}@${f.version!}`)} (${f.ecosystem!}): no published SLSA/sigstore attestation — package was not built through a verifiable CI pipeline`,
+        );
+      }
+    }
+    if (binaries.length) {
+      lines.push("### Binary files committed (no reviewable source)");
+      for (const f of binaries) {
+        lines.push(
+          `- ${safeCodeSpan(f.file!)} — binary artifact without source documentation`,
+        );
+      }
+    }
+    if (vendored.length) {
+      lines.push(
+        "### Vendored or minified code committed (audit source before merging)",
+      );
+      for (const f of vendored) {
+        lines.push(
+          `- ${safeCodeSpan(f.file!)} — vendored or minified code without upstream source reference`,
+        );
+      }
+    }
+  }
+
   const codeownersViolations = findings.codeowners ?? [];
   if (codeownersViolations.length) {
     const allOwners = new Set(codeownersViolations.flatMap((f) => f.owners));
@@ -156,6 +220,36 @@ export function renderBrief(
             : "a full request/session object";
       lines.push(
         `- ${safeCodeSpan(`${item.file}:${item.line}`)} — ${safeCodeSpan(item.sink)} writes ${what} to a log/stdout sink; redact or remove`,
+      );
+    }
+  }
+
+  const assets = findings.assetWeight ?? [];
+  if (assets.length) {
+    lines.push(
+      "### Heavy binary assets (optimize, or move to a CDN / Git LFS)",
+    );
+    for (const item of assets) {
+      const detail =
+        item.status === "added"
+          ? `adds ${formatBytes(item.bytes)}`
+          : `grows +${formatBytes(item.deltaBytes)} to ${formatBytes(item.bytes)}`;
+      lines.push(`- ${safeCodeSpan(item.path)} ${detail}`);
+    }
+  }
+
+  const typosquats = findings.typosquat ?? [];
+  if (typosquats.length) {
+    lines.push(
+      "### Typosquat / dependency-confusion risks (verify the package name before merging)",
+    );
+    for (const item of typosquats) {
+      const detail =
+        item.kind === "typosquat"
+          ? `${item.reason} — likely typosquat of ${safeCodeSpan(item.similarTo ?? "")}`
+          : item.reason;
+      lines.push(
+        `- ${safeCodeSpan(`${item.package}@${item.version}`)} (${item.ecosystem}): ${detail}`,
       );
     }
   }

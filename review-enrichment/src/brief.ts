@@ -8,14 +8,18 @@ import type {
   AnalyzerStatus,
 } from "./types.js";
 import { scanDependencies } from "./analyzers/dependency-scan.js";
+import { scanLockfileDrift } from "./analyzers/lockfile-drift.js";
 import { scanSecrets } from "./analyzers/secret-scan.js";
 import { scanLicenses } from "./analyzers/license-check.js";
 import { scanInstallScripts } from "./analyzers/install-scripts.js";
 import { scanActionPins } from "./analyzers/actions-pin.js";
 import { scanEol } from "./analyzers/eol-check.js";
 import { scanRedos } from "./analyzers/redos.js";
+import { scanProvenance } from "./analyzers/provenance.js";
 import { scanCodeowners } from "./analyzers/codeowners.js";
 import { scanSecretLog } from "./analyzers/secret-log.js";
+import { scanAssetWeight } from "./analyzers/asset-weight.js";
+import { scanTyposquat } from "./analyzers/typosquat.js";
 import { renderBrief } from "./render.js";
 
 type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
@@ -23,14 +27,18 @@ type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
 // The analyzer registry. More land behind this same shape: license (#1475), secret (#1476), static (#1477), history (#1478).
 const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   dependency: (req, signal) => scanDependencies(req, fetch, { signal }),
+  lockfileDrift: (req, signal) => scanLockfileDrift(req, fetch, { signal }),
   secret: (req) => scanSecrets(req),
   license: (req) => scanLicenses(req),
   installScript: (req) => scanInstallScripts(req),
   actionPin: (req) => scanActionPins(req),
   eol: (req) => scanEol(req),
   redos: (req) => scanRedos(req),
+  provenance: (req, signal) => scanProvenance(req, fetch, { signal }),
   codeowners: (req, signal) => scanCodeowners(req, fetch, { signal }),
   secretLog: (req, signal) => scanSecretLog(req, signal),
+  assetWeight: (req, signal) => scanAssetWeight(req, fetch, { signal }),
+  typosquat: (req, signal) => scanTyposquat(req, fetch, { signal }),
 };
 
 function runWithTimeout<T>(

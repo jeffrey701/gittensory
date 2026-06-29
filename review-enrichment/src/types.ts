@@ -13,6 +13,7 @@ export interface EnrichRequest {
   files?: Array<{
     path: string;
     status?: string;
+    previousPath?: string;
     patch?: string;
     additions?: number;
     deletions?: number;
@@ -35,6 +36,19 @@ export interface Cve {
 /** One added/changed dependency that carries at least one known vulnerability. */
 export interface DependencyFinding {
   ecosystem: string;
+  package: string;
+  from: string | null;
+  to: string;
+  direction: "add" | "change";
+  cves: Cve[];
+}
+
+/** A vulnerable lockfile-only dependency resolution. The package was not changed in a top-level manifest diff,
+ *  so it is treated as transitive lockfile drift and reported with the lockfile location that introduced it. */
+export interface LockfileDriftFinding {
+  file: string;
+  line: number;
+  ecosystem: "npm" | "PyPI";
   package: string;
   from: string | null;
   to: string;
@@ -93,6 +107,20 @@ export interface RedosFinding {
   pattern: string;
 }
 
+/** A newly-added dependency (npm/PyPI) lacking a published provenance attestation, or a binary/vendored file
+ *  committed without auditable source — supply-chain integrity risks the no-checkout reviewer cannot verify. */
+export interface ProvenanceFinding {
+  kind: "no-attestation" | "binary" | "vendored";
+  /** Ecosystem — set for no-attestation findings. */
+  ecosystem?: string;
+  /** Package name — set for no-attestation findings. */
+  package?: string;
+  /** Resolved version — set for no-attestation findings. */
+  version?: string;
+  /** File path — set for binary and vendored findings. */
+  file?: string;
+}
+
 /** A changed file governed by a CODEOWNERS rule where the PR author is not listed as an owner (#1515).
  *  The blast radius (distinct ownership domains crossed) is derived at render time from the full findings set. */
 export interface CodeownersFinding {
@@ -109,17 +137,46 @@ export interface SecretLogFinding {
   category: "secret" | "pii" | "request-object";
 }
 
+/** A heavy binary asset the PR adds or grows. `bytes` is the size at headSha; `deltaBytes` is the growth vs base
+ *  (equal to `bytes` for a newly-added file). */
+export interface AssetWeightFinding {
+  path: string;
+  bytes: number;
+  deltaBytes: number;
+  status: "added" | "grown";
+}
+
+/** A newly-added dependency whose name is a near-miss of a popular package (typosquat) or an unscoped name that
+ *  is not published on the public registry and is therefore publicly claimable (dependency-confusion). Reports
+ *  the package name + the reason only — never the manifest contents. (#1501) */
+export interface TyposquatFinding {
+  ecosystem: string;
+  package: string;
+  version: string;
+  kind: "typosquat" | "confusion";
+  /** The popular package the name is a near-miss of — set for `typosquat` findings. */
+  similarTo?: string;
+  /** Damerau-Levenshtein distance to `similarTo` — set for edit-distance `typosquat` findings (0 = homoglyph/separator). */
+  distance?: number;
+  /** Short, public-safe explanation of why the name was flagged. */
+  reason: string;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
+  lockfileDrift?: LockfileDriftFinding[];
   secret?: SecretFinding[];
   license?: LicenseFinding[];
   actionPin?: ActionPinFinding[];
   installScript?: InstallScriptFinding[];
   eol?: EolFinding[];
   redos?: RedosFinding[];
+  provenance?: ProvenanceFinding[];
   codeowners?: CodeownersFinding[];
   secretLog?: SecretLogFinding[];
+  assetWeight?: AssetWeightFinding[];
+  typosquat?: TyposquatFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";
