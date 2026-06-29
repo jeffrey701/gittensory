@@ -144,9 +144,9 @@ export function createSqliteQueue(
   function enqueue(message: JobMessage, delaySeconds: number): void {
     const now = Date.now();
     const payload = JSON.stringify(message);
-    const runAfter = now + delaySeconds * 1000;
     const priority = jobPriority(payload);
     const key = jobCoalesceKey(payload);
+    const runAfter = nextRunAfter(now, delaySeconds * 1000, `${key ?? ""}:${payload}`);
     if (key) {
       const existing = driver.query(
         `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=? ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
@@ -186,6 +186,13 @@ export function createSqliteQueue(
     );
     /* v8 ignore next */ // the no-rows branch is a multi-writer guard; unreachable in the single-process model
     return changes ? row : null;
+  }
+
+  function nextRunAfter(now: number, delayMs: number, seed: string): number {
+    const requested = now + delayMs;
+    if (now >= githubRateLimitCooldownUntil) return requested;
+    const cooldownDelay = githubRateLimitCooldownUntil - now;
+    return Math.max(requested, now + rateLimitRetryDelayWithJitter(cooldownDelay, seed));
   }
 
   async function processOne(): Promise<boolean> {

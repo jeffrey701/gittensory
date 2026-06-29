@@ -201,9 +201,9 @@ export function createPgQueue(
   ): Promise<void> {
     const now = Date.now();
     const payload = JSON.stringify(message);
-    const runAfter = now + delaySeconds * 1000;
     const priority = jobPriority(payload);
     const key = jobCoalesceKey(payload);
+    const runAfter = nextRunAfter(now, delaySeconds * 1000, `${key ?? ""}:${payload}`);
     if (key) {
       const existing = (
         await pool.query(
@@ -241,6 +241,13 @@ export function createPgQueue(
       [Date.now()],
     );
     return (res.rows[0] as JobRow | undefined) ?? null;
+  }
+
+  function nextRunAfter(now: number, delayMs: number, seed: string): number {
+    const requested = now + delayMs;
+    if (now >= githubRateLimitCooldownUntil) return requested;
+    const cooldownDelay = githubRateLimitCooldownUntil - now;
+    return Math.max(requested, now + rateLimitRetryDelayWithJitter(cooldownDelay, seed));
   }
 
   async function processOne(): Promise<boolean> {

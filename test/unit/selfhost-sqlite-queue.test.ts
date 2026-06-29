@@ -396,6 +396,14 @@ describe("createSqliteQueue (durable #980)", () => {
       gittensory_jobs_rate_limited_total: 1,
       gittensory_jobs_rate_limit_deferred_total: 1,
     });
+
+    await q.binding.send(msg("github-webhook"));
+    const afterEnqueue = driver.query(
+      "SELECT run_after FROM _selfhost_jobs ORDER BY id DESC LIMIT 1",
+      [],
+    ).rows[0] as { run_after: number };
+    expect(calls).toBe(1);
+    expect(afterEnqueue.run_after).toBeGreaterThan(before + 100_000);
   });
 
   it("reschedules retryable incomplete review jobs without consuming the dead-letter budget", async () => {
