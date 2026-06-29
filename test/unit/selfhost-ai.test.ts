@@ -372,6 +372,8 @@ describe("branch coverage — defaults + edge inputs", () => {
     expect(typeof buildProvider("openai", { OPENAI_API_KEY: "sk-test" })?.run).toBe("function"); // defaults to https://api.openai.com/v1
     expect(typeof buildProvider("ollama", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
     expect(typeof buildProvider("openai-compatible", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
+    expect(buildProvider("anthropic", {})).toBeUndefined(); // anthropic is credentialed and requires ANTHROPIC_API_KEY
+    expect(typeof buildProvider("anthropic", { ANTHROPIC_API_KEY: "sk-ant" })?.run).toBe("function");
   });
   it("extractCliText reads content + response fields", () => {
     expect(extractCliText(JSON.stringify({ content: "c" }))).toBe("c");

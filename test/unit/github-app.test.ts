@@ -897,6 +897,55 @@ describe("GitHub check runs", () => {
     );
   });
 
+  it("leaves an already-completed legacy Gate check alone while posting the renamed review-agent check", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const calls: string[] = [];
+    let newCheckBody: { name?: string; status?: string } = {};
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push(`${method} ${url}`);
+        if (url.includes("/access_tokens"))
+          return Response.json({ token: "installation-token" });
+        if (url.includes("/commits/legacy-completed/check-runs")) {
+          const checkName = new URL(url).searchParams.get("check_name");
+          if (checkName === "Gittensory Orb Review Agent")
+            return Response.json({ total_count: 0, check_runs: [] });
+          if (checkName === "Gittensory Gate")
+            return Response.json({
+              total_count: 1,
+              check_runs: [
+                { id: 323, name: "Gittensory Gate", status: "completed" },
+              ],
+            });
+        }
+        if (url.includes("/check-runs/323"))
+          throw new Error("must not patch completed legacy check");
+        if (url.includes("/check-runs") && method === "POST") {
+          newCheckBody = JSON.parse(String(init?.body)) as typeof newCheckBody;
+          return Response.json({ id: 91 }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+
+    const result = await createOrUpdatePendingGateCheckRun(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+      123,
+      "JSONbored/gittensory",
+      gateAdvisory("legacy-completed"),
+    );
+
+    expect(result).toMatchObject({ kind: "published", id: 91 });
+    expect(newCheckBody).toMatchObject({
+      name: "Gittensory Orb Review Agent",
+      status: "in_progress",
+    });
+    expect(calls.some((call) => call.includes("/check-runs/323"))).toBe(false);
+  });
+
   it("still posts the renamed review-agent check when legacy Gate cleanup fails", async () => {
     const privateKey = await generatePrivateKeyPem();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -1226,6 +1275,58 @@ describe("GitHub check runs", () => {
     expect(capturedBody.output?.text).toContain(
       "does not post late first comments",
     );
+  });
+
+  it("reposts a known check-run id when the old run belongs to a prior App", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        calls.push(`${method} ${url}`);
+        if (url.includes("/access_tokens"))
+          return Response.json({ token: "installation-token" });
+        if (method === "PATCH" && url.includes("/check-runs/456"))
+          return new Response(
+            JSON.stringify({
+              message:
+                "Invalid app_id 3824093 - check run can only be modified by the GitHub App that created it.",
+            }),
+            { status: 403 },
+          );
+        if (method === "POST" && url.includes("/check-runs"))
+          return Response.json({ id: 457, html_url: "https://github.com/checks/457" }, { status: 201 });
+        return new Response("not found", { status: 404 });
+      },
+    );
+
+    try {
+      const result = await createOrUpdateGateCheckRun(
+        createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+        123,
+        "JSONbored/gittensory",
+        gateAdvisory("cross-app-known-id"),
+        {},
+        { checkRunId: 456 },
+      );
+
+      expect(result).toMatchObject({ kind: "published", id: 457 });
+      expect(
+        calls.some((call) =>
+          call.includes("/commits/cross-app-known-id/check-runs"),
+        ),
+      ).toBe(false);
+      expect(
+        logSpy.mock.calls.some((call) =>
+          String(call[0]).includes('"staleCheckRunId":456'),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it("publishes Context check annotations on changed files while Gate stays text-only", async () => {

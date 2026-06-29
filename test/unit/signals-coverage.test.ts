@@ -962,6 +962,22 @@ describe("signal coverage edge cases", () => {
     expect(aiBlockedComment).toContain("`src/a.ts` has a syntax error.");
     expect(aiBlockedComment.indexOf("**Review summary**")).toBeLessThan(aiBlockedComment.indexOf("**Readiness score:"));
 
+    const aiExplicitNoBlockersComment = buildPublicPrIntelligenceComment({
+      repo: directRepo,
+      pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
+      profile,
+      detection,
+      queueHealth: buildQueueHealth(directRepo, [], [currentPr], buildCollisionReport(directRepo.fullName, [], [currentPr])),
+      collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
+      preflight: buildPreflightResult({ repoFullName: directRepo.fullName, title: "Fix isolated issue", body: "Fixes #99", linkedIssues: [99] }, directRepo, [], [currentPr]),
+      settings: { ...repoSettings(directRepo.fullName), gateCheckMode: "off" },
+      aiReview: { notes: "The change is focused.\n\n**Blockers**\n- None.\n\n**Nits (1)**\n- Add a regression test." },
+    });
+    expect(aiExplicitNoBlockersComment).toContain("> [!TIP]");
+    expect(aiExplicitNoBlockersComment).not.toContain(
+      "Gittensory review found blockers",
+    );
+
     const advisoryOnlyComment = buildPublicPrIntelligenceComment({
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },

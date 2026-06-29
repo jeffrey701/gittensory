@@ -508,6 +508,23 @@ describe("focus-manifest policy gate (#555)", () => {
       expect(result.summary).toMatch(/held for manual review/i);
     });
 
+    it("preserves public blocked-path context on the manual-review hold warning", () => {
+      const advisory = manifestAdvisory("manifest_blocked_path");
+      advisory.findings[0] = {
+        ...advisory.findings[0]!,
+        publicText: "Matched guarded paths: .github/workflows/**.",
+      };
+      const result = evaluateGateCheck(advisory, {
+        manifestPolicyGateMode: "block",
+        confirmedContributor: true,
+      });
+      const hold = result.warnings.find(
+        (finding) => finding.code === "manifest_blocked_path",
+      );
+      expect(result.conclusion).toBe("neutral");
+      expect(hold?.publicText).toBe("Matched guarded paths: .github/workflows/**.");
+    });
+
     it("also holds non-confirmed contributors for manual review instead of closing", () => {
       const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "block", confirmedContributor: false });
       expect(result.conclusion).toBe("neutral");

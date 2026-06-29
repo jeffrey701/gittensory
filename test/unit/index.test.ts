@@ -368,6 +368,40 @@ describe("worker entrypoint", () => {
     expect(sent.some((m) => m.type === "ops-alerts")).toBe(false);
   });
 
+  it("enqueues selftune hourly only when GITTENSORY_REVIEW_SELFTUNE is ON", async () => {
+    const sentFor = async (
+      selfTuneFlag?: string,
+    ): Promise<Array<import("../../src/types").JobMessage>> => {
+      const sent: Array<import("../../src/types").JobMessage> = [];
+      const env = createTestEnv({
+        ...(selfTuneFlag === undefined
+          ? {}
+          : { GITTENSORY_REVIEW_SELFTUNE: selfTuneFlag }),
+        JOBS: {
+          async send(message: import("../../src/types").JobMessage) {
+            sent.push(message);
+          },
+        } as unknown as Queue,
+      });
+      const waitUntil: Promise<unknown>[] = [];
+      await worker.scheduled(
+        controllerFor("2026-05-25T05:00:00.000Z"),
+        env,
+        executionContext(waitUntil),
+      );
+      await Promise.all(waitUntil);
+      return sent;
+    };
+
+    expect((await sentFor()).some((m) => m.type === "selftune")).toBe(false);
+    expect((await sentFor("false")).some((m) => m.type === "selftune")).toBe(
+      false,
+    );
+    expect((await sentFor("true")).filter((m) => m.type === "selftune")).toEqual([
+      { type: "selftune", requestedBy: "schedule" },
+    ]);
+  });
+
   it("enqueues the rag-index-repo fan-out in the full-sync window ONLY when GITTENSORY_REVIEW_RAG is ON (flag-OFF is byte-identical)", async () => {
     const sentFor = async (ragFlag?: string): Promise<Array<import("../../src/types").JobMessage>> => {
       const sent: Array<import("../../src/types").JobMessage> = [];

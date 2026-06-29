@@ -3894,7 +3894,42 @@ export async function runAiReviewForAdvisory(
         cacheable: false,
       };
     }
-    return undefined;
+    const unavailableFinding: AdvisoryFinding = {
+      code: "ai_review_inconclusive",
+      severity: "warning",
+      title: "AI review did not produce public notes",
+      detail:
+        "The configured AI reviewer returned no usable public assessment for this PR head.",
+      action:
+        "Fix the configured AI provider, then re-run Gittensory review before relying on the result.",
+    };
+    findings.push(unavailableFinding);
+    args.advisory.findings.push(unavailableFinding);
+    captureReviewFailure(
+      new Error("AI review did not produce public notes for the PR head"),
+      {
+        kind: "review",
+        reason: "ai_review_public_summary_missing",
+        owner: args.repoFullName.split("/")[0],
+        repo: args.repoFullName,
+        pr: args.pr.number,
+        head_sha: args.advisory.headSha,
+        ai_review_mode: args.settings.aiReviewMode,
+        reviewer_count: result.reviewerCount,
+        configured_reviewers:
+          env.AI_REVIEW_PLAN?.reviewers?.map((reviewer) => reviewer.model) ??
+          null,
+        combine: env.AI_REVIEW_PLAN?.combine ?? null,
+      },
+    );
+    return {
+      notes:
+        "AI review is unavailable for this PR head. Gittensory is holding this PR for manual review until the configured AI provider returns a usable public review summary.",
+      reviewerCount: result.reviewerCount,
+      inlineFindings: [],
+      findings,
+      cacheable: false,
+    };
   } catch (error) {
     console.error(
       JSON.stringify({

@@ -165,7 +165,10 @@ describe("runAiReviewForAdvisory", () => {
     (env as unknown as { AI_PROVIDER: string; CLAUDE_AI_MODEL: string }).AI_PROVIDER = "claude-code";
     (env as unknown as { AI_PROVIDER: string; CLAUDE_AI_MODEL: string }).CLAUDE_AI_MODEL = "claude-sonnet-4-6";
     const result = await runAiReviewForAdvisory(env, { settings: { aiReviewMode: "advisory" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", pr, author: "alice", confirmedContributor: true });
-    expect(result).toBeUndefined(); // provider threw → no usable output, degraded not crashed
+    expect(result).toMatchObject({
+      cacheable: false,
+      findings: [expect.objectContaining({ code: "ai_review_inconclusive" })],
+    }); // provider threw → manual-review hold, degraded not crashed
     const usage = await env.DB.prepare("SELECT model FROM ai_usage_events WHERE feature = 'ai_review_pr' ORDER BY created_at DESC LIMIT 1").first<{ model: string }>();
     expect(usage?.model).toBe("claude-code:claude-sonnet-4-6");
   });
@@ -174,7 +177,10 @@ describe("runAiReviewForAdvisory", () => {
     const env = aiEnv(async () => { throw new Error("codex unavailable"); });
     (env as unknown as { AI_PROVIDER: string }).AI_PROVIDER = " CODEX , unknown-provider ";
     const result = await runAiReviewForAdvisory(env, { settings: { aiReviewMode: "advisory" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", pr, author: "alice", confirmedContributor: true });
-    expect(result).toBeUndefined();
+    expect(result).toMatchObject({
+      cacheable: false,
+      findings: [expect.objectContaining({ code: "ai_review_inconclusive" })],
+    });
     const usage = await env.DB.prepare("SELECT model FROM ai_usage_events WHERE feature = 'ai_review_pr' ORDER BY created_at DESC LIMIT 1").first<{ model: string }>();
     expect(usage?.model).toBe("codex");
   });
@@ -186,7 +192,10 @@ describe("runAiReviewForAdvisory", () => {
       AI_REVIEW_PLAN: { reviewers: [{ model: "ollama" }], combine: "single" },
     });
     const result = await runAiReviewForAdvisory(env, { settings: { aiReviewMode: "advisory" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", pr, author: "alice", confirmedContributor: true });
-    expect(result).toBeUndefined();
+    expect(result).toMatchObject({
+      cacheable: false,
+      findings: [expect.objectContaining({ code: "ai_review_inconclusive" })],
+    });
     const usage = await env.DB.prepare("SELECT model FROM ai_usage_events WHERE feature = 'ai_review_pr' ORDER BY created_at DESC LIMIT 1").first<{ model: string }>();
     expect(usage?.model).toBe("ollama");
   });
@@ -452,16 +461,39 @@ describe("runAiReviewForAdvisory", () => {
     expect(adv.findings).toEqual([]);
   });
 
-  it("returns undefined when the model produces no parseable notes", async () => {
+  it("holds for manual review when the AI provider produces no public notes", async () => {
+    const adv = advisory();
+    const captureSpy = vi.spyOn(sentryModule, "captureReviewFailure");
     const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: "not json" })), {
       settings: { aiReviewMode: "advisory" } as RepositorySettings,
-      advisory: advisory(),
+      advisory: adv,
       repoFullName: "acme/widgets",
       pr,
       author: "alice",
       confirmedContributor: true,
     });
-    expect(result).toBeUndefined();
+    expect(result).toMatchObject({
+      reviewerCount: 0,
+      cacheable: false,
+      findings: [
+        expect.objectContaining({ code: "ai_review_inconclusive" }),
+      ],
+    });
+    expect(result?.notes).toContain("AI review is unavailable");
+    expect(adv.findings.map((f) => f.code)).toEqual([
+      "ai_review_inconclusive",
+    ]);
+    expect(captureSpy).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        reason: "ai_review_public_summary_missing",
+        repo: "acme/widgets",
+        pr: 3,
+        head_sha: "sha3",
+        reviewer_count: 0,
+      }),
+    );
+    captureSpy.mockRestore();
   });
 
   it("preserves model nits when the model omits the assessment summary", async () => {
