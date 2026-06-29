@@ -222,6 +222,39 @@ describe("createPgQueue (durable #977)", () => {
     );
   });
 
+  it("reclaims expired processing leases before claiming more work", async () => {
+    const oldTimeout = process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+    const oldRecoveryJitter = process.env.QUEUE_RECOVERY_JITTER_MS;
+    process.env.QUEUE_PROCESSING_TIMEOUT_MS = "1";
+    process.env.QUEUE_RECOVERY_JITTER_MS = "0";
+    try {
+      const m = makePool();
+      const q = createPgQueue(m.pool, async () => undefined);
+      await q.init();
+      m.fn.mockResolvedValueOnce({
+        rows: [{ id: "old", payload: JSON.stringify(msg("stuck")), job_key: "stuck-key" }],
+        rowCount: 1,
+      });
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+      await q.drain();
+
+      expect(m.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining("WHERE status='processing' AND run_after<=$1"),
+        expect.arrayContaining([expect.any(Number)]),
+      );
+      expect(m.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining("SET status='pending', run_after=$1"),
+        expect.arrayContaining([expect.any(Number), "processing lease expired; requeued", "old"]),
+      );
+    } finally {
+      if (oldTimeout === undefined) delete process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+      else process.env.QUEUE_PROCESSING_TIMEOUT_MS = oldTimeout;
+      if (oldRecoveryJitter === undefined) delete process.env.QUEUE_RECOVERY_JITTER_MS;
+      else process.env.QUEUE_RECOVERY_JITTER_MS = oldRecoveryJitter;
+    }
+  });
+
   it("reschedules retryable incomplete review jobs without consuming the dead-letter budget", async () => {
     const m = makePool();
     m.enqueueJob("1", { type: "agent-regate-pr" }, 4);

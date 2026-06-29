@@ -479,6 +479,39 @@ describe("createSqliteQueue (durable #980)", () => {
     }
   });
 
+  it("reclaims an expired processing lease without requiring a restart", async () => {
+    const oldTimeout = process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+    const oldRecoveryJitter = process.env.QUEUE_RECOVERY_JITTER_MS;
+    process.env.QUEUE_PROCESSING_TIMEOUT_MS = "1";
+    process.env.QUEUE_RECOVERY_JITTER_MS = "0";
+    const driver = makeDriver();
+    const seen: string[] = [];
+    try {
+      const q = createSqliteQueue(
+        driver,
+        async (m) => void seen.push(typeOf(m)),
+        { concurrency: 1 },
+      );
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'processing', 0, ?, 0)",
+        [JSON.stringify(msg("lease-expired")), Date.now() - 10_000],
+      );
+
+      await q.drain();
+
+      expect(seen).toEqual(["lease-expired"]);
+      expect(q.stats()).toMatchObject({
+        gittensory_jobs_recovered_total: 1,
+        gittensory_jobs_processed_total: 1,
+      });
+    } finally {
+      if (oldTimeout === undefined) delete process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+      else process.env.QUEUE_PROCESSING_TIMEOUT_MS = oldTimeout;
+      if (oldRecoveryJitter === undefined) delete process.env.QUEUE_RECOVERY_JITTER_MS;
+      else process.env.QUEUE_RECOVERY_JITTER_MS = oldRecoveryJitter;
+    }
+  });
+
   it("records 'unknown error' when a consumer throws a non-Error", async () => {
     const q = createSqliteQueue(
       makeDriver(),

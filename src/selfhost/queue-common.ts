@@ -5,6 +5,7 @@ const DEFAULT_RATE_LIMIT_JITTER_MS = 5 * 60_000;
 const DEFAULT_STARTUP_JITTER_MS = 3 * 60_000;
 const DEFAULT_RECOVERY_JITTER_MS = 60_000;
 const DEFAULT_STARTUP_JITTER_MIN_JOBS = 8;
+const DEFAULT_PROCESSING_TIMEOUT_MS = 30 * 60_000;
 
 // Webhook-driven work (a fresh PR -> its review) jumps ahead of heavy background jobs. Per-PR review refreshes
 // sit just below real webhooks, and sweep fan-out sits below those so stale surfaces are repaired during bursts.
@@ -107,6 +108,13 @@ export function queueStartupJitterMs(): number {
 
 export function queueRecoveryJitterMs(): number {
   return envDurationMs("QUEUE_RECOVERY_JITTER_MS", DEFAULT_RECOVERY_JITTER_MS);
+}
+
+export function queueProcessingTimeoutMs(): number {
+  return envDurationMs(
+    "QUEUE_PROCESSING_TIMEOUT_MS",
+    DEFAULT_PROCESSING_TIMEOUT_MS,
+  );
 }
 
 export function queueStartupJitterMinJobs(): number {

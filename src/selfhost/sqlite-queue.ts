@@ -13,6 +13,7 @@ import {
   jobCoalesceKey,
   jobPriority,
   nonConsumingRetryDelayMs,
+  queueProcessingTimeoutMs,
   queueRecoveryJitterMs,
   queueStartupJitterMinJobs,
   queueStartupJitterMs,
@@ -85,6 +86,7 @@ export function createSqliteQueue(
   const concurrency =
     opts.concurrency ??
     Math.max(1, Number(process.env.QUEUE_CONCURRENCY ?? "4"));
+  const processingTimeoutMs = queueProcessingTimeoutMs();
 
   driver.exec(DDL);
   driver.exec(STATS_DDL);
@@ -138,6 +140,7 @@ export function createSqliteQueue(
 
   let running = false;
   let active = 0; // number of concurrent pump() loops currently draining jobs
+  const activeJobIds = new Set<number>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let githubRateLimitCooldownUntil = 0;
 
@@ -174,15 +177,16 @@ export function createSqliteQueue(
 
   function claimNext(): JobRow | null {
     if (Date.now() < githubRateLimitCooldownUntil) return null;
+    const now = Date.now();
     const { rows } = driver.query(
       `SELECT id, payload, attempts, job_key FROM ${TABLE} WHERE status='pending' AND run_after<=? ORDER BY priority DESC, run_after, id LIMIT 1`,
-      [Date.now()],
+      [now],
     );
     const row = rows[0] as JobRow | undefined;
     if (!row) return null;
     const { changes } = driver.query(
-      `UPDATE ${TABLE} SET status='processing' WHERE id=? AND status='pending'`,
-      [row.id],
+      `UPDATE ${TABLE} SET status='processing', run_after=? WHERE id=? AND status='pending'`,
+      [now, row.id],
     );
     /* v8 ignore next */ // the no-rows branch is a multi-writer guard; unreachable in the single-process model
     return changes ? row : null;
@@ -196,138 +200,165 @@ export function createSqliteQueue(
   }
 
   async function processOne(): Promise<boolean> {
+    const recovered = reclaimExpiredProcessingJobs(
+      driver,
+      processingTimeoutMs,
+      activeJobIds,
+    );
+    if (recovered) {
+      recordQueueMetric(driver, "gittensory_jobs_recovered_total", recovered);
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "selfhost_queue_processing_reclaimed",
+          count: recovered,
+          timeout_ms: processingTimeoutMs,
+        }),
+      );
+      captureError(new Error("self-host queue processing lease expired"), {
+        kind: "job_recovered",
+        reason: "processing_timeout",
+        recovered,
+        timeoutMs: processingTimeoutMs,
+      });
+    }
     const job = claimNext();
     if (!job) return false;
+    activeJobIds.add(job.id);
     const claimedAt = Date.now();
-    let message: JobMessage;
     try {
-      message = JSON.parse(job.payload) as JobMessage;
-    } catch {
-      driver.query(
-        `UPDATE ${TABLE} SET status='dead', last_error='unparseable payload' WHERE id=?`,
-        [job.id],
-      );
-      recordQueueMetric(driver, "gittensory_jobs_dead_total");
-      logAudit({
-        event: "job_dead",
-        ts: Date.now(),
-        job_id: job.id,
-        latency_ms: Date.now() - claimedAt,
-        attempts: job.attempts + 1,
-        error: "unparseable payload",
-      });
-      captureError(new Error("unparseable queue payload"), {
-        kind: "job_dead",
-        reason: "unparseable_payload",
-        jobId: job.id,
-      });
-      return true;
-    }
-    try {
-      await consume(message);
-      driver.query(`DELETE FROM ${TABLE} WHERE id=?`, [job.id]);
-      recordQueueMetric(driver, "gittensory_jobs_processed_total");
-      logAudit({
-        event: "job_complete",
-        ts: Date.now(),
-        job_id: job.id,
-        payload_type: extractPayloadType(job.payload),
-        latency_ms: Date.now() - claimedAt,
-        attempts: job.attempts + 1,
-      });
-    } catch (error) {
-      const attempts = job.attempts + 1;
-      const errMsg = error instanceof Error ? error.message : "unknown error";
-      const nonConsumingDelayMs = nonConsumingRetryDelayMs(error);
-      if (nonConsumingDelayMs !== null) {
-        const rateLimited = githubRateLimitRetryDelayMs(error) !== null;
-        const now = Date.now();
-        const retryAfter = now + (rateLimited ? rateLimitRetryDelayWithJitter(nonConsumingDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`) : nonConsumingDelayMs);
-        if (rateLimited) {
-          githubRateLimitCooldownUntil = Math.max(githubRateLimitCooldownUntil, now + nonConsumingDelayMs);
-          const deferred = deferPendingJobsForRateLimit(driver, nonConsumingDelayMs, now);
-          if (deferred) {
-            recordQueueMetric(driver, "gittensory_jobs_rate_limit_deferred_total", deferred);
-            console.warn(
-              JSON.stringify({
-                level: "warn",
-                event: "selfhost_queue_rate_limit_cooldown",
-                deferred,
-                cooldown_until: githubRateLimitCooldownUntil,
-              }),
-            );
-          }
-        }
-        if (job.job_key && mergeRescheduledJobIntoPending(driver, job, retryAfter, errMsg)) {
-          recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
-        } else {
-          driver.query(
-            `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=? WHERE id=?`,
-            [retryAfter, errMsg, job.id],
-          );
-        }
-        recordQueueMetric(driver, rateLimited ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
-        logAudit({
-          event: "job_rate_limited",
-          ts: Date.now(),
-          job_id: job.id,
-          payload_type: extractPayloadType(job.payload),
-          latency_ms: Date.now() - claimedAt,
-          attempts,
-          retry_after_ms: Math.max(0, retryAfter - Date.now()),
-          error: errMsg,
-        });
-        return true;
-      }
-      recordQueueMetric(driver, "gittensory_jobs_failed_total");
-      if (attempts >= maxRetries) {
+      let message: JobMessage;
+      try {
+        message = JSON.parse(job.payload) as JobMessage;
+      } catch {
         driver.query(
-          `UPDATE ${TABLE} SET status='dead', attempts=?, last_error=? WHERE id=?`,
-          [attempts, errMsg, job.id],
+          `UPDATE ${TABLE} SET status='dead', last_error='unparseable payload' WHERE id=?`,
+          [job.id],
         );
         recordQueueMetric(driver, "gittensory_jobs_dead_total");
-        console.error(
-          JSON.stringify({
-            level: "error",
-            event: "selfhost_job_dead",
-            id: job.id,
-            attempts,
-            error: errMsg,
-          }),
-        );
         logAudit({
           event: "job_dead",
           ts: Date.now(),
           job_id: job.id,
-          payload_type: extractPayloadType(job.payload),
           latency_ms: Date.now() - claimedAt,
-          attempts,
-          error: errMsg,
+          attempts: job.attempts + 1,
+          error: "unparseable payload",
         });
-        captureError(error, {
+        captureError(new Error("unparseable queue payload"), {
           kind: "job_dead",
-          reason: "max_retries_exhausted",
-          jobType: extractPayloadType(job.payload),
+          reason: "unparseable_payload",
           jobId: job.id,
-          attempts,
         });
-      } else {
-        driver.query(
-          `UPDATE ${TABLE} SET status='pending', attempts=?, run_after=?, last_error=? WHERE id=?`,
-          [attempts, Date.now() + backoff(attempts), errMsg, job.id],
-        );
+        return true;
+      }
+      try {
+        await consume(message);
+        driver.query(`DELETE FROM ${TABLE} WHERE id=?`, [job.id]);
+        recordQueueMetric(driver, "gittensory_jobs_processed_total");
         logAudit({
-          event: "job_error",
+          event: "job_complete",
           ts: Date.now(),
           job_id: job.id,
           payload_type: extractPayloadType(job.payload),
           latency_ms: Date.now() - claimedAt,
-          attempts,
-          error: errMsg,
+          attempts: job.attempts + 1,
         });
+      } catch (error) {
+        const attempts = job.attempts + 1;
+        const errMsg = error instanceof Error ? error.message : "unknown error";
+        const nonConsumingDelayMs = nonConsumingRetryDelayMs(error);
+        if (nonConsumingDelayMs !== null) {
+          const rateLimited = githubRateLimitRetryDelayMs(error) !== null;
+          const now = Date.now();
+          const retryAfter = now + (rateLimited ? rateLimitRetryDelayWithJitter(nonConsumingDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`) : nonConsumingDelayMs);
+          if (rateLimited) {
+            githubRateLimitCooldownUntil = Math.max(githubRateLimitCooldownUntil, now + nonConsumingDelayMs);
+            const deferred = deferPendingJobsForRateLimit(driver, nonConsumingDelayMs, now);
+            if (deferred) {
+              recordQueueMetric(driver, "gittensory_jobs_rate_limit_deferred_total", deferred);
+              console.warn(
+                JSON.stringify({
+                  level: "warn",
+                  event: "selfhost_queue_rate_limit_cooldown",
+                  deferred,
+                  cooldown_until: githubRateLimitCooldownUntil,
+                }),
+              );
+            }
+          }
+          if (job.job_key && mergeRescheduledJobIntoPending(driver, job, retryAfter, errMsg)) {
+            recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
+          } else {
+            driver.query(
+              `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=? WHERE id=?`,
+              [retryAfter, errMsg, job.id],
+            );
+          }
+          recordQueueMetric(driver, rateLimited ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
+          logAudit({
+            event: "job_rate_limited",
+            ts: Date.now(),
+            job_id: job.id,
+            payload_type: extractPayloadType(job.payload),
+            latency_ms: Date.now() - claimedAt,
+            attempts,
+            retry_after_ms: Math.max(0, retryAfter - Date.now()),
+            error: errMsg,
+          });
+          return true;
+        }
+        recordQueueMetric(driver, "gittensory_jobs_failed_total");
+        if (attempts >= maxRetries) {
+          driver.query(
+            `UPDATE ${TABLE} SET status='dead', attempts=?, last_error=? WHERE id=?`,
+            [attempts, errMsg, job.id],
+          );
+          recordQueueMetric(driver, "gittensory_jobs_dead_total");
+          console.error(
+            JSON.stringify({
+              level: "error",
+              event: "selfhost_job_dead",
+              id: job.id,
+              attempts,
+              error: errMsg,
+            }),
+          );
+          logAudit({
+            event: "job_dead",
+            ts: Date.now(),
+            job_id: job.id,
+            payload_type: extractPayloadType(job.payload),
+            latency_ms: Date.now() - claimedAt,
+            attempts,
+            error: errMsg,
+          });
+          captureError(error, {
+            kind: "job_dead",
+            reason: "max_retries_exhausted",
+            jobType: extractPayloadType(job.payload),
+            jobId: job.id,
+            attempts,
+          });
+        } else {
+          driver.query(
+            `UPDATE ${TABLE} SET status='pending', attempts=?, run_after=?, last_error=? WHERE id=?`,
+            [attempts, Date.now() + backoff(attempts), errMsg, job.id],
+          );
+          logAudit({
+            event: "job_error",
+            ts: Date.now(),
+            job_id: job.id,
+            payload_type: extractPayloadType(job.payload),
+            latency_ms: Date.now() - claimedAt,
+            attempts,
+            error: errMsg,
+          });
+        }
       }
+      return true;
+    } finally {
+      activeJobIds.delete(job.id);
     }
-    return true;
   }
 
   // Drains every job that is currently DUE. A retry is rescheduled into the future (run_after > now) so it is
@@ -493,6 +524,32 @@ function deferPendingJobsForRateLimit(
     const { changes } = driver.query(
       `UPDATE ${TABLE} SET run_after=max(run_after, ?), last_error=coalesce(last_error, ?) WHERE id=? AND status='pending'`,
       [runAfter, "github rate-limit cooldown", row.id],
+    );
+    changed += changes;
+  }
+  return changed;
+}
+
+function reclaimExpiredProcessingJobs(
+  driver: SqliteDriver,
+  timeoutMs: number,
+  activeJobIds: Set<number>,
+): number {
+  if (timeoutMs <= 0) return 0;
+  const now = Date.now();
+  const cutoff = now - timeoutMs;
+  const { rows } = driver.query(
+    `SELECT id, payload, job_key FROM ${TABLE} WHERE status='processing' AND run_after<=?`,
+    [cutoff],
+  );
+  let changed = 0;
+  const maxJitter = queueRecoveryJitterMs();
+  for (const row of rows as Array<{ id: number; payload: string; job_key?: string | null }>) {
+    if (activeJobIds.has(row.id)) continue;
+    const runAfter = now + deterministicJitterMs(`${row.job_key ?? ""}:${row.id}:${row.payload}`, maxJitter);
+    const { changes } = driver.query(
+      `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=coalesce(last_error, ?) WHERE id=? AND status='processing'`,
+      [runAfter, "processing lease expired; requeued", row.id],
     );
     changed += changes;
   }
