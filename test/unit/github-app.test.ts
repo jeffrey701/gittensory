@@ -14,10 +14,13 @@ import {
   isCacheableGithubUrl,
   isCheckRunPermissionError,
   isForeignAppInstallation,
+  isGitHubBadCredentialsError,
+  isGitHubRateLimitedError,
   isRateLimitedResponse,
   rateLimitRetryMs,
   setGitHubResponseCache,
   setInstallationTokenStore,
+  withInstallationTokenRetry,
 } from "../../src/github/app";
 import type { Advisory } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
@@ -246,6 +249,40 @@ describe("GitHub check runs", () => {
     expect(evictionWrites).toBe(1);
     expect(mints).toBe(1);
     expect(rejectedReads).toBe(1);
+  });
+
+  it("does not evict a newer cached installation token when the rejected token is already stale", async () => {
+    const reads = [
+      { token: "rejected-token", expiresAtMs: Date.now() + 60 * 60_000 },
+      { token: "replacement-token", expiresAtMs: Date.now() + 60 * 60_000 },
+      { token: "replacement-token", expiresAtMs: Date.now() + 60 * 60_000 },
+    ];
+    const writes: Array<{ token: string; expiresAtMs: number }> = [];
+    setInstallationTokenStore({
+      get: async () => reads.shift() ?? null,
+      set: async (_installationId, value) => {
+        writes.push(value);
+      },
+    });
+    const seenTokens: string[] = [];
+
+    const result = await withInstallationTokenRetry(createTestEnv(), 558, async (token) => {
+      seenTokens.push(token);
+      if (token === "rejected-token")
+        throw { response: { status: 401 }, message: "token expired" };
+      return "ok";
+    });
+
+    expect(result).toBe("ok");
+    expect(seenTokens).toEqual(["rejected-token", "replacement-token"]);
+    expect(writes).toEqual([]);
+    expect(isGitHubBadCredentialsError(new Error("Bad credentials"))).toBe(true);
+    expect(isGitHubBadCredentialsError({ response: { status: 401 }, message: "Unauthorized" })).toBe(true);
+  });
+
+  it("does not treat primitive values as GitHub rate-limit errors", () => {
+    expect(isGitHubRateLimitedError("secondary rate limit")).toBe(false);
+    expect(isGitHubRateLimitedError(null)).toBe(false);
   });
 
   it("single-flights concurrent cold-cache mints for one install (no thundering herd)", async () => {

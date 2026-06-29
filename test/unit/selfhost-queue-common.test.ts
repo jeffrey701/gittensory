@@ -8,6 +8,7 @@ import {
   jobPriority,
   nonConsumingRetryDelayMs,
   queueBackgroundConcurrency,
+  queueStartupJitterMinJobs,
 } from "../../src/selfhost/queue-common";
 import { RetryableJobError } from "../../src/queue/retryable";
 
@@ -36,6 +37,9 @@ describe("self-host queue common helpers", () => {
     expect(queueBackgroundConcurrency(4, "-1")).toBe(1);
     expect(queueBackgroundConcurrency(4, "not-a-number")).toBe(1);
     expect(queueBackgroundConcurrency(4, "0")).toBe(0);
+    expect(queueBackgroundConcurrency(Number.NaN, "3")).toBe(0);
+    expect(queueBackgroundConcurrency(4, null)).toBe(1);
+    expect(queueBackgroundConcurrency(4, "")).toBe(1);
   });
 
   it("demotes bot-authored issue-comment edit webhooks without demoting human reruns", () => {
@@ -78,9 +82,26 @@ describe("self-host queue common helpers", () => {
     parse.mockRestore();
   });
 
+  it("fails closed when an agent re-gate priority payload becomes unreadable after type extraction", () => {
+    const raw = payload({ type: "agent-regate-pr" });
+    const parse = vi.spyOn(JSON, "parse");
+    parse
+      .mockImplementationOnce(() => ({ type: "agent-regate-pr" }))
+      .mockImplementationOnce(() => {
+        throw new Error("malformed re-gate payload");
+      });
+
+    expect(jobPriority(raw)).toBe(9);
+    parse.mockRestore();
+  });
+
   it("coalesces CI-completion webhooks with sorted pull numbers", () => {
+    expect(jobCoalesceKey(payload({ type: "agent-regate-pr", repoFullName: "JSONbored/Gittensory", prNumber: 7 }))).toBe("agent-regate-pr:jsonbored/gittensory#7");
+    expect(jobCoalesceKey(payload({ type: "agent-regate-pr", repoFullName: "JSONbored/Gittensory" }))).toBeNull();
     expect(jobCoalesceKey(payload({ type: "agent-regate-sweep", requestedBy: "schedule" }))).toBe("agent-regate-sweep:all");
     expect(jobCoalesceKey(payload({ type: "agent-regate-sweep", repoFullName: "JSONbored/Gittensory" }))).toBe("agent-regate-sweep:jsonbored/gittensory");
+    expect(jobCoalesceKey(payload({ type: "recapture-preview", repoFullName: "JSONbored/Gittensory", prNumber: 7, attempt: 2 }))).toBe("recapture-preview:jsonbored/gittensory#7:2");
+    expect(jobCoalesceKey(payload({ type: "recapture-preview", repoFullName: "JSONbored/Gittensory", prNumber: 7 }))).toBeNull();
     expect(
       jobCoalesceKey(
         payload({
@@ -97,6 +118,49 @@ describe("self-host queue common helpers", () => {
         }),
       ),
     ).toBe("github-webhook:ci-completed:jsonbored/gittensory@abc1234#3,7,12");
+    expect(
+      jobCoalesceKey(
+        payload({
+          type: "github-webhook",
+          eventName: "check_run",
+          payload: {
+            action: "completed",
+            repository: { full_name: "JSONbored/Gittensory" },
+            check_run: {
+              check_suite: { head_sha: "DEF5678" },
+              pull_requests: [],
+            },
+          },
+        }),
+      ),
+    ).toBe("github-webhook:ci-completed:jsonbored/gittensory@def5678");
+    expect(
+      jobCoalesceKey(
+        payload({
+          type: "github-webhook",
+          eventName: "check_suite",
+          payload: {
+            action: "completed",
+            repository: { full_name: "JSONbored/Gittensory" },
+            check_suite: { pull_requests: [{ number: 7 }] },
+          },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      jobCoalesceKey(
+        payload({
+          type: "github-webhook",
+          eventName: "pull_request",
+          payload: {
+            action: "synchronize",
+            repository: { full_name: "JSONbored/Gittensory" },
+            number: 99,
+            pull_request: {},
+          },
+        }),
+      ),
+    ).toBe("github-webhook:pr-refresh:jsonbored/gittensory#99");
   });
 
   it("returns no coalesce key for malformed payloads", () => {
@@ -133,6 +197,27 @@ describe("self-host queue common helpers", () => {
         1_000_000,
       ),
     ).toBe(8_000);
+    expect(
+      githubRateLimitRetryDelayMs(
+        {
+          status: 403,
+          response: {
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": "990",
+            },
+          },
+        },
+        1_000_000,
+      ),
+    ).toBe(300_000);
+    expect(
+      githubRateLimitRetryDelayMs({
+        status: 429,
+        response: { headers: new Headers() },
+        message: "rate limit",
+      }),
+    ).toBe(300_000);
   });
 
   it("keeps only GitHub rate limits on the non-consuming retry path", () => {
@@ -164,5 +249,37 @@ describe("self-host queue common helpers", () => {
         77,
       ),
     ).toBe(1234);
+    expect(
+      consumingRetryDelayMs(
+        new RetryableJobError("AI review pending", {
+          retryAfterMs: Number.NaN,
+          retryKind: "ai_review_public_summary_missing",
+        }),
+        77,
+      ),
+    ).toBe(300_000);
+    expect(
+      consumingRetryDelayMs(
+        new RetryableJobError("AI review pending", {
+          retryKind: "ai_review_public_summary_missing",
+        }),
+        77,
+      ),
+    ).toBe(300_000);
+  });
+
+  it("bounds startup jitter min-jobs config to a non-negative finite integer", () => {
+    const old = process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+    try {
+      process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = "2.9";
+      expect(queueStartupJitterMinJobs()).toBe(2);
+      process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = "-1";
+      expect(queueStartupJitterMinJobs()).toBe(8);
+      process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = "not-a-number";
+      expect(queueStartupJitterMinJobs()).toBe(8);
+    } finally {
+      if (old === undefined) delete process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+      else process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = old;
+    }
   });
 });

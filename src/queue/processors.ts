@@ -400,7 +400,6 @@ const PR_PUBLIC_SURFACE_ACTIONS = new Set([
 ]);
 const PR_GATE_CLOSED_ACTIONS = new Set(["closed"]);
 const ISSUE_PLAN_COOLDOWN_MS = 10 * 60 * 1000;
-const AI_REVIEW_INCOMPLETE_RETRY_MS = 5 * 60 * 1000;
 
 /**
  * Run (or dry-run) the data-retention prune across the configured log/snapshot tables and audit the
@@ -4695,33 +4694,27 @@ async function maybePublishPrPublicSurface(
       }
     }
     if (aiReviewExpected && !hasPublicReviewAssessment(aiReview?.notes)) {
-      const retryError = new RetryableJobError(
-        "AI review did not produce a public summary yet; keeping PR surface in reviewing state",
-        {
-          retryAfterMs: AI_REVIEW_INCOMPLETE_RETRY_MS,
-          retryKind: "ai_review_public_summary_missing",
-        },
-      );
+      const message =
+        "AI review did not produce a public summary; publishing deterministic PR surface without AI notes";
       await recordAuditEvent(env, {
         eventType: "github_app.ai_review_public_summary_missing",
         actor: author,
         targetKey: `${repoFullName}#${pr.number}`,
-        outcome: "error",
-        detail: retryError.message,
+        outcome: "completed",
+        detail: message,
         metadata: {
           deliveryId: webhook.deliveryId,
           repoFullName,
-          retryAfterMs: AI_REVIEW_INCOMPLETE_RETRY_MS,
+          aiReviewMode: settings.aiReviewMode,
         },
       }).catch(() => undefined);
-      captureReviewFailure(retryError, {
+      captureReviewFailure(new Error(message), {
         kind: "review",
         reason: "ai_review_public_summary_missing",
         repo: repoFullName,
         pr: pr.number,
         head_sha: advisory.headSha,
       });
-      throw retryError;
     }
 
     // Secrets-scan (#audit-3.4): always scans the REAL resolved diff and, on a CONCRETE credential hit, appends a

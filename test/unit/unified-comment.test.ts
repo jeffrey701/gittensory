@@ -123,8 +123,8 @@ describe("renderUnifiedReviewComment", () => {
     );
     expect(md).toContain("> [!TIP]");
     expect(md).toContain("🟩");
-    expect(md).toContain("Gittensory review — safe to merge · auto-merged");
-    expect(md).toContain("Approved & auto-merged");
+    expect(md).toContain("Gittensory review result - approve/merge recommended · auto-merged");
+    expect(md).toContain("Suggested Action - Approve/Merge");
     expect(md).toContain("`2 files`");
     expect(md).toContain("`2 AI reviewers`");
     expect(md).toContain("`no blockers`");
@@ -134,6 +134,7 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("| **Code review** | ✅ No blockers | 2 reviewers, synthesized |");
     expect(md).toContain("| Linked issue | ✅ Linked | #1372 |");
     expect(md).toContain("<details><summary><b>Nits</b> — 1 non-blocking</summary>");
+    expect(md).toContain("- [ ] Document the new property.");
     expect(md.indexOf("**Review summary**")).toBeLessThan(md.indexOf("<details><summary><b>Nits</b>"));
     expect(md.indexOf("<details><summary><b>Nits</b>")).toBeLessThan(md.indexOf("| Signal | Result | Evidence |"));
     expect(md).toContain("<details><summary><b>Signal definitions</b></summary>");
@@ -168,7 +169,7 @@ describe("renderUnifiedReviewComment", () => {
     );
     expect(md).toContain("> [!CAUTION]");
     expect(md).toContain("🟥");
-    expect(md).toContain("Closed");
+    expect(md).toContain("Suggested Action - Reject/Close");
     expect(md).toContain("Why this is blocked");
     expect(md).toContain("Introduces a hardcoded secret.");
     expect(md).toContain("| **Code review** | ❌ 1 blocker |");
@@ -178,14 +179,14 @@ describe("renderUnifiedReviewComment", () => {
     const md = renderUnifiedReviewComment({ ...base, decision: "manual", recommendations: ["manual_review"] }, ctx);
     expect(md).toContain("> [!WARNING]");
     expect(md).toContain("🟨");
-    expect(md).toContain("Held for maintainer review");
+    expect(md).toContain("Suggested Action - Manual Review");
   });
 
   it("advisory state uses the note alert and blue bar", () => {
     const md = renderUnifiedReviewComment({ ...base, decision: "comment", recommendations: [] }, {});
     expect(md).toContain("> [!NOTE]");
     expect(md).toContain("🟦");
-    expect(md).toContain("Advisory only");
+    expect(md).toContain("Suggested Action - Advisory Only");
   });
 
   it("dedupes repeated blockers and nits", () => {
@@ -200,7 +201,34 @@ describe("renderUnifiedReviewComment", () => {
     const md = renderUnifiedReviewComment({ ...base, decision: "merge" }, {});
     expect(md).not.toContain("readiness");
     expect(md).not.toContain("- [ ]");
+    expect(md).not.toContain("Review updated:");
     expect(md.split("\n").some((l) => l.trim() === "> ---")).toBe(false);
+  });
+
+  it("renders a UTC freshness marker when the host supplies the review update time", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, decision: "merge" },
+      { reviewedAt: "2026-06-29T08:05:59.852Z" },
+    );
+    expect(md).toContain("<sub>Review updated: 2026-06-29 08:05:59 UTC</sub>");
+    expect(renderUnifiedReviewComment({ ...base, decision: "merge" }, { reviewedAt: "not-a-date" })).not.toContain("Review updated:");
+  });
+
+  it("drops blank failing-check details and falls back to bare check names", () => {
+    const md = renderUnifiedReviewComment(
+      {
+        ...base,
+        readiness: {
+          ciState: "failed",
+          failingChecks: ["fallback-check"],
+          failingDetails: [{ name: "   " }, { name: "lint" }],
+        },
+      },
+      {},
+    );
+    expect(md).toContain("CI checks failing");
+    expect(md).toContain("- lint");
+    expect(md).not.toContain("fallback-check");
   });
 
   it("only emits provided content (no internal fields leak in)", () => {
@@ -211,9 +239,9 @@ describe("renderUnifiedReviewComment", () => {
   it("a blocked status from reviewer recs (no close decision) reads 'blocked', not 'closed'", () => {
     const md = renderUnifiedReviewComment({ ...base, recommendations: ["close"], blockers: ["Leaks a token."], consensusBlocker: true }, {});
     expect(md).toContain("> [!CAUTION]");
-    expect(md).toContain("Gittensory review — blocked"); // verb(): decision !== "close"
-    expect(md).toContain("**🛑 Blocked**"); // verdictLine(): decision !== "close"
-    expect(md).not.toContain("Closed");
+    expect(md).toContain("Gittensory review result - blockers found"); // headlineLabel(): decision !== "close"
+    expect(md).toContain("**🛑 Suggested Action - Fix Blockers**"); // verdictLine(): decision !== "close"
+    expect(md).not.toContain("Suggested Action - Reject/Close");
   });
 
   it("renders CI-failing / CI-pending chips and the merge-state label", () => {
@@ -269,13 +297,13 @@ describe("renderUnifiedReviewComment", () => {
   it("appends an explicit verdict reason across ready (merged + unmerged) and advisory states", () => {
     // The verdict word is bolded (`**…**`); the reason follows outside the bold, so assert each separately.
     const merged = renderUnifiedReviewComment({ ...base, decision: "merge", merged: true, verdictReason: "all checks green" }, {});
-    expect(merged).toContain("Approved & auto-merged");
+    expect(merged).toContain("Suggested Action - Approve/Merge");
     expect(merged).toContain("all checks green"); // verdictReason appended, not the default " — all checks passed"
     const unmerged = renderUnifiedReviewComment({ ...base, decision: "merge", verdictReason: "looks correct" }, {});
     expect(unmerged).not.toContain("auto-merged"); // the unmerged ready variant
     expect(unmerged).toContain("looks correct");
     const advisory = renderUnifiedReviewComment({ ...base, decision: "comment", recommendations: [], verdictReason: "for your awareness" }, {});
-    expect(advisory).toContain("Advisory only");
+    expect(advisory).toContain("Suggested Action - Advisory Only");
     expect(advisory).toContain("for your awareness");
   });
 
@@ -324,7 +352,7 @@ describe("renderUnifiedReviewComment", () => {
 
     expect(md).toContain("Safe summary &lt;/details&gt;&lt;!-- hidden --&gt;");
     expect(md).toContain("- Blocker &lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(md).toContain("- Nit closes &lt;/details&gt;");
+    expect(md).toContain("- [ ] Nit closes &lt;/details&gt;");
     expect(md).toContain("needs &lt;maintainer&gt; review");
     expect(md).toContain("| Gate &lt;row&gt; | ❌ Bad &lt;tag&gt; | Evidence &lt;/td&gt; |");
     expect(md).toContain("<details><summary><b>Extra &lt;title&gt;</b></summary>");

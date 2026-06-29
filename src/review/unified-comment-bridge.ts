@@ -274,6 +274,8 @@ export type UnifiedCommentBridgeArgs = {
   /** The author is the repo owner or a protected automation bot — never auto-closed, so a gate "close" verdict
    *  renders as "held" rather than "Closed" (#8/#9). */
   neverClosed?: boolean | undefined;
+  /** Public freshness marker for the posted/updated review comment. Defaults to the current publish time. */
+  reviewedAt?: string | number | Date | undefined;
 };
 
 /**
@@ -382,6 +384,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     readinessScore: args.readinessTotal,
     signals,
     footerMarkdown: args.footerMarkdown,
+    reviewedAt: args.reviewedAt ?? new Date(),
     ...(args.reRunLabel !== undefined ? { reRunLabel: args.reRunLabel } : {}),
     ...(extraCollapsibles !== undefined ? { extraCollapsibles } : {}),
     ...(args.heldForReview ? { heldForReview: true } : {}),

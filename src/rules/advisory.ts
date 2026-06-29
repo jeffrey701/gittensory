@@ -41,10 +41,10 @@ export type GateCheckPolicy = {
    *  linked-issue, duplicate, quality/readiness, slop — to its mode, so a maintainer flips ONE switch instead
    *  of four and `Gittensory Gate` stays the single required check. `off` = sub-gates use their own modes. */
   mergeReadinessGateMode?: GateRuleMode | undefined;
-  /** Focus-manifest policy gate (#555). When `block`, the focus manifest's declared policy findings —
-   *  `manifest_blocked_path`, `manifest_linked_issue_required`, `manifest_missing_tests` — become hard
-   *  blockers. An INDEPENDENT dimension, deliberately NOT folded into the merge-readiness composite so #555
-   *  stays focused. `off`/`advisory` = the findings stay advisory (never block). Default off. */
+  /** Focus-manifest policy gate (#555). When `block`, linked-issue/test policy findings become hard blockers;
+   *  blocked-path findings become manual-review holds because guardrailed paths should be reviewed, not closed.
+   *  An INDEPENDENT dimension, deliberately NOT folded into the merge-readiness composite so #555 stays focused.
+   *  `off`/`advisory` = the findings stay advisory (never block). Default off. */
   manifestPolicyGateMode?: GateRuleMode | undefined;
   /** Self-authored linked-issue gate. When `block`, a `self_authored_linked_issue` finding — raised when
    *  the PR author also filed the linked issue — becomes a hard blocker. Defaults to `advisory` — the
@@ -440,6 +440,27 @@ function buildGuardrailHoldFinding(): AdvisoryFinding {
   };
 }
 
+function buildManifestBlockedPathHoldFinding(
+  findings: AdvisoryFinding[],
+  policy: GateCheckPolicy,
+): AdvisoryFinding | null {
+  if (gateMode(policy.manifestPolicyGateMode ?? "off") !== "block")
+    return null;
+  const blocked = findings.find(
+    (finding) => finding.code === "manifest_blocked_path",
+  );
+  if (!blocked) return null;
+  return {
+    code: "manifest_blocked_path",
+    severity: "warning",
+    title: "Touches a maintainer-blocked path — held for manual review",
+    detail:
+      "This PR changes a maintainer-blocked path, so it is held for a maintainer to review and merge manually.",
+    action: "A maintainer must review and merge this change.",
+    ...(blocked.publicText !== undefined ? { publicText: blocked.publicText } : {}),
+  };
+}
+
 /** Dry-run disposition (#gate-dryrun): promote every `advisory` sub-gate mode to `block` so the core eval yields the
  *  would-be conclusion. `off`/`block`/unset modes are untouched; non-mode policy (grace, size HOLD, guardrail) is
  *  preserved as-is, so the would-be verdict still honours newcomer grace and the manual-review holds. PURE. */
@@ -546,7 +567,11 @@ function evaluateGateCheckCore(advisoryResult: Advisory, policy: GateCheckPolicy
     // so neutral never blocks the merge (dry-run/advisory friendly) and a contributor PR is never auto-closed for size.
     const sizeHold = buildSizeHoldFinding(effective);
     const guardrailHold = effective.guardrailHit ? buildGuardrailHoldFinding() : null;
-    const holds = [sizeHold, guardrailHold].filter(
+    const manifestBlockedPathHold = buildManifestBlockedPathHoldFinding(
+      advisoryResult.findings,
+      effective,
+    );
+    const holds = [sizeHold, guardrailHold, manifestBlockedPathHold].filter(
       (f): f is AdvisoryFinding => f !== null,
     );
     if (holds.length > 0) {
@@ -864,9 +889,9 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // when the maintainer configured an enforced check). The advisory variant (`pre_merge_check_failed`) is a plain
   // warning and is never blocked here. No AI judgment is involved, so this can never cause an AI false-close.
   if (code === "pre_merge_check_required") return true;
-  // Focus-manifest policy (#555): the three enforceable manifest findings block ONLY when the maintainer
-  // opts into manifestPolicy: block. Default off/advisory keeps them advisory-only.
-  if (code === "manifest_blocked_path" || code === "manifest_linked_issue_required" || code === "manifest_missing_tests") {
+  // Focus-manifest policy (#555): linked-issue/test policy findings block ONLY when the maintainer opts into
+  // manifestPolicy: block. Blocked paths are guardrails, so they are handled as manual-review holds above.
+  if (code === "manifest_linked_issue_required" || code === "manifest_missing_tests") {
     return gateMode(policy.manifestPolicyGateMode ?? "off") === "block";
   }
   // Self-authored linked-issue gate: blocks only when the maintainer opts in with `block`. Defaults to

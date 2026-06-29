@@ -209,6 +209,8 @@ export interface UnifiedCommentContext {
   /** The PR's author is the repo owner or a protected automation bot — the disposition NEVER auto-closes them,
    *  so a gate "close" verdict renders as "held", not "Closed" (#8/#9). */
   neverClosed?: boolean;
+  /** Public freshness marker for the posted/updated review comment. Rendered as UTC when provided. */
+  reviewedAt?: string | number | Date | undefined;
 }
 
 const STATUS_META: Record<UnifiedCommentStatus, { alert: string; square: string; icon: string }> = {
@@ -282,16 +284,16 @@ export function deriveUnifiedStatus(input: UnifiedReviewInput, ctx: UnifiedComme
   return status;
 }
 
-function verb(status: UnifiedCommentStatus, input: UnifiedReviewInput): string {
+function headlineLabel(status: UnifiedCommentStatus, input: UnifiedReviewInput): string {
   switch (status) {
     case "ready":
-      return "safe to merge";
+      return "approve/merge recommended";
     case "advisory":
-      return "advisory only";
+      return "advisory review";
     case "held":
-      return "held for maintainer review";
+      return "manual review recommended";
     case "blocked":
-      return input.decision === "close" ? "closed" : "blocked";
+      return input.decision === "close" ? "reject/close recommended" : "blockers found";
   }
 }
 
@@ -319,14 +321,14 @@ function verdictLine(status: UnifiedCommentStatus, input: UnifiedReviewInput): s
   switch (status) {
     case "ready":
       return input.merged
-        ? `**${icon} Approved & auto-merged**${input.verdictReason ? reason : " — all checks passed"}`
-        : `**${icon} Approved**${input.verdictReason ? reason : " — safe to merge"}`;
+        ? `**${icon} Suggested Action - Approve/Merge**${input.verdictReason ? reason : " — auto-merged"}`
+        : `**${icon} Suggested Action - Approve/Merge**${input.verdictReason ? reason : " — safe to merge"}`;
     case "advisory":
-      return `**${icon} Advisory only**${input.verdictReason ? reason : " — no action taken"}`;
+      return `**${icon} Suggested Action - Advisory Only**${input.verdictReason ? reason : " — no action taken"}`;
     case "held":
-      return `**${icon} Held for maintainer review**${reason}`;
+      return `**${icon} Suggested Action - Manual Review**${reason}`;
     case "blocked":
-      return `**${icon} ${input.decision === "close" ? "Closed" : "Blocked"}**${reason}`;
+      return `**${icon} Suggested Action - ${input.decision === "close" ? "Reject/Close" : "Fix Blockers"}**${reason}`;
   }
 }
 
@@ -356,6 +358,20 @@ function bullets(items: string[]): string {
   return dedupeLines(items)
     .map((i) => `- ${escapePublicHtmlAngles(i)}`)
     .join("\n");
+}
+
+function taskList(items: string[]): string {
+  return dedupeLines(items)
+    .map((i) => `- [ ] ${escapePublicHtmlAngles(i)}`)
+    .join("\n");
+}
+
+function formatReviewTimestamp(value: string | number | Date | undefined): string | null {
+  if (value === undefined) return null;
+  const time = value instanceof Date ? value : new Date(value);
+  const ms = time.getTime();
+  if (!Number.isFinite(ms)) return null;
+  return time.toISOString().replace(/\.\d{3}Z$/, "Z").replace("T", " ").replace("Z", " UTC");
 }
 
 /** Render the failing CI checks as a bullet list of `name — reason` (reason only when the check carried one),
@@ -440,15 +456,17 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
 
   const blocks: string[] = [
     meta.square.repeat(12),
-    `### ${meta.icon} ${brand} — ${verb(status, input)}${status === "ready" && input.merged ? " · auto-merged" : ""}`,
+    `### ${meta.icon} ${brand} result - ${headlineLabel(status, input)}${status === "ready" && input.merged ? " · auto-merged" : ""}`,
     statusChips(input, ctx),
     verdictLine(status, input),
   ];
+  const reviewTimestamp = formatReviewTimestamp(ctx.reviewedAt);
+  if (reviewTimestamp) blocks.push(`<sub>Review updated: ${reviewTimestamp}</sub>`);
 
   if (input.summary.trim()) blocks.push(`**Review summary**\n${escapePublicHtmlAngles(input.summary.trim())}`);
 
   const nits = dedupeLines(input.nits ?? []);
-  if (nits.length) blocks.push(details("Nits", bullets(nits), `${nits.length} non-blocking`));
+  if (nits.length) blocks.push(details("Nits", taskList(nits), `${nits.length} non-blocking`));
 
   const blockers = dedupeLines(input.blockers ?? []);
   if (blockers.length) {

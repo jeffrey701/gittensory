@@ -221,6 +221,33 @@ describe("createSqliteQueue (durable #980)", () => {
     }
   });
 
+  it("does not spread a due backlog when startup jitter is disabled", async () => {
+    const oldMin = process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+    const oldJitter = process.env.QUEUE_STARTUP_JITTER_MS;
+    process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = "2";
+    process.env.QUEUE_STARTUP_JITTER_MS = "0";
+    try {
+      const driver = makeDriver();
+      createSqliteQueue(driver, async () => undefined);
+      for (const deliveryId of ["ci-1", "ci-2"]) {
+        driver.query(
+          "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
+          [JSON.stringify(ciWebhook(deliveryId)), deliveryId],
+        );
+      }
+
+      createSqliteQueue(driver, async () => undefined);
+
+      const rows = driver.query("SELECT run_after FROM _selfhost_jobs ORDER BY id", []).rows as Array<{ run_after: number }>;
+      expect(rows).toEqual([{ run_after: 0 }, { run_after: 0 }]);
+    } finally {
+      if (oldMin === undefined) delete process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+      else process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = oldMin;
+      if (oldJitter === undefined) delete process.env.QUEUE_STARTUP_JITTER_MS;
+      else process.env.QUEUE_STARTUP_JITTER_MS = oldJitter;
+    }
+  });
+
   it("migrates an old queue table without a priority column before creating the claim index", async () => {
     const driver = makeDriver();
     driver.exec(`
@@ -409,6 +436,44 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(afterEnqueue.run_after).toBeGreaterThan(before + 100_000);
   });
 
+  it("coalesces a rate-limited active job into an existing pending duplicate without consuming attempts", async () => {
+    const driver = makeDriver();
+    let calls = 0;
+    const rateLimit = new Error("secondary rate limit");
+    Object.assign(rateLimit, { status: 403 });
+    const key = `github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`;
+    const q = createSqliteQueue(
+      driver,
+      async () => {
+        calls += 1;
+        throw rateLimit;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
+      [JSON.stringify(ciWebhook("ci-active")), key],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, ?, 0, 10, ?)",
+      [JSON.stringify(ciWebhook("ci-existing")), Date.now() + 60_000, key],
+    );
+
+    await q.drain();
+
+    const rows = driver.query("SELECT payload, attempts, last_error FROM _selfhost_jobs ORDER BY id", []).rows as Array<{
+      payload: string;
+      attempts: number;
+      last_error: string | null;
+    }>;
+    expect(calls).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]!.payload).deliveryId).toBe("ci-existing");
+    expect(rows[0]!.attempts).toBe(0);
+    expect(rows[0]!.last_error).toContain("secondary rate limit");
+    expect(q.stats()).toMatchObject({ gittensory_jobs_coalesced_total: 1 });
+  });
+
   it("consumes retryable incomplete review attempts and dead-letters after maxRetries", async () => {
     const driver = makeDriver();
     let calls = 0;
@@ -504,6 +569,27 @@ describe("createSqliteQueue (durable #980)", () => {
     driver.query("INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'pending', 0, 0, 0)", [JSON.stringify(msg("persisted"))]);
     await fresh.drain(); // the "new process" picks it up
     expect(seen).toEqual(["persisted"]);
+  });
+
+  it("does not reclaim processing jobs when the processing timeout is disabled", async () => {
+    const old = process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+    process.env.QUEUE_PROCESSING_TIMEOUT_MS = "0";
+    try {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'processing', 0, 0, 0, 10, ?)",
+        [JSON.stringify(msg("stuck")), "stuck-key"],
+      );
+
+      await q.drain();
+
+      expect(driver.query("SELECT status FROM _selfhost_jobs", []).rows[0]).toMatchObject({ status: "processing" });
+      expect(q.stats().gittensory_jobs_recovered_total ?? 0).toBe(0);
+    } finally {
+      if (old === undefined) delete process.env.QUEUE_PROCESSING_TIMEOUT_MS;
+      else process.env.QUEUE_PROCESSING_TIMEOUT_MS = old;
+    }
   });
 
   it("start() runs the poll loop and processes a job, stop() halts it", async () => {

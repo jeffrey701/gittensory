@@ -475,7 +475,7 @@ describe("focus-manifest policy gate (#555)", () => {
     return { ...missingIssueAdvisory(), findings: [POLICY_FINDINGS[code]] };
   }
 
-  for (const code of Object.keys(POLICY_FINDINGS) as (keyof typeof POLICY_FINDINGS)[]) {
+  for (const code of ["manifest_linked_issue_required", "manifest_missing_tests"] as const) {
     describe(code, () => {
       it("blocks a confirmed contributor when manifestPolicy: block", () => {
         const result = evaluateGateCheck(manifestAdvisory(code), { manifestPolicyGateMode: "block", confirmedContributor: true });
@@ -499,6 +499,27 @@ describe("focus-manifest policy gate (#555)", () => {
     });
   }
 
+  describe("manifest_blocked_path", () => {
+    it("holds for manual review when manifestPolicy: block", () => {
+      const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "block", confirmedContributor: true });
+      expect(result.conclusion).toBe("neutral");
+      expect(result.blockers).toEqual([]);
+      expect(result.warnings.map((finding) => finding.code)).toContain("manifest_blocked_path");
+      expect(result.summary).toMatch(/held for manual review/i);
+    });
+
+    it("also holds non-confirmed contributors for manual review instead of closing", () => {
+      const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "block", confirmedContributor: false });
+      expect(result.conclusion).toBe("neutral");
+      expect(result.blockers).toEqual([]);
+    });
+
+    it("does not block when manifestPolicy: off/advisory", () => {
+      expect(evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "off", confirmedContributor: true }).conclusion).toBe("success");
+      expect(evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "advisory", confirmedContributor: true }).conclusion).toBe("success");
+    });
+  });
+
   it("is an INDEPENDENT dimension: mergeReadiness: block does NOT promote a manifest-policy finding (kept out of the composite)", () => {
     const eff = resolveEffectiveSettings(settings({ manifestPolicyGateMode: "off", mergeReadinessGateMode: "block" }), parseFocusManifest(null));
     expect(evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
@@ -508,12 +529,13 @@ describe("focus-manifest policy gate (#555)", () => {
     expect(gateCheckPolicy(settings({ manifestPolicyGateMode: "block" }), null, true).manifestPolicyGateMode).toBe("block");
   });
 
-  it("end-to-end: a manifest gate.manifestPolicy: block sets effective.manifestPolicyGateMode and blocks a blockedPath PR", () => {
+  it("end-to-end: a manifest gate.manifestPolicy: block sets effective.manifestPolicyGateMode and holds a blockedPath PR", () => {
     const eff = resolveEffectiveSettings(settings({ manifestPolicyGateMode: "off" }), parseFocusManifest({ gate: { manifestPolicy: "block" } }));
     expect(eff.manifestPolicyGateMode).toBe("block");
     const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), gateCheckPolicy(eff, null, true));
-    expect(result.conclusion).toBe("failure");
-    expect(result.blockers.map((finding) => finding.code)).toContain("manifest_blocked_path");
+    expect(result.conclusion).toBe("neutral");
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings.map((finding) => finding.code)).toContain("manifest_blocked_path");
   });
 });
 

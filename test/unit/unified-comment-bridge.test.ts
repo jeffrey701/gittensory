@@ -223,6 +223,19 @@ describe("buildUnifiedCommentBody", () => {
     expect(body).toContain("> [!TIP]"); // success → ready → TIP alert
   });
 
+  it("passes a public review update timestamp into the unified comment", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate(),
+      aiReview: { notes: "Clean change." },
+      panelRows,
+      readinessTotal: 88,
+      changedFiles: 3,
+      footerMarkdown: footer,
+      reviewedAt: "2026-06-29T08:05:59.852Z",
+    });
+    expect(body).toContain("<sub>Review updated: 2026-06-29 08:05:59 UTC</sub>");
+  });
+
   it("does not claim an AI reviewer or synthesize a review from deterministic warnings alone", () => {
     const body = buildUnifiedCommentBody({
       gate: gate({
@@ -264,9 +277,9 @@ describe("buildUnifiedCommentBody", () => {
       changedFiles: 5,
       footerMarkdown: footer,
     });
-    // failure → close verdict → blocked status (CAUTION alert + "Blocked"/"Closed" verdict line).
+    // failure → close verdict → blocked status (CAUTION alert + reject/close suggested action).
     expect(failing).toContain("> [!CAUTION]");
-    expect(failing).toMatch(/Closed|Blocked/);
+    expect(failing).toContain("Suggested Action - Reject/Close");
     // The recovered consensus defect surfaces as a blocker.
     expect(failing).toContain("Real bug");
   });
@@ -315,27 +328,27 @@ describe("buildUnifiedCommentBody", () => {
 
   it("heldForReview renders a passing PR as HELD, never 'safe to merge' (#guarded-hold-comment)", () => {
     const args = { gate: gate({ conclusion: "success" }), panelRows, readinessTotal: 90, changedFiles: 2, mergeReadiness: { ciState: "passed" as const }, footerMarkdown: footer };
-    // Without the hold, a success+green PR is the green "safe to merge" headline.
+    // Without the hold, a success+green PR is the green approve/merge recommendation.
     const ready = buildUnifiedCommentBody(args);
     expect(ready).toContain("> [!TIP]");
-    expect(ready).toContain("safe to merge");
+    expect(ready).toContain("Suggested Action - Approve/Merge");
     // With the guarded hold, the SAME PR renders held (WARNING), not safe-to-merge — matching the disposition.
     const held = buildUnifiedCommentBody({ ...args, heldForReview: true });
     expect(held).toContain("> [!WARNING]");
-    expect(held).toContain("Held for maintainer review");
+    expect(held).toContain("Suggested Action - Manual Review");
     expect(held).not.toContain("> [!TIP]");
   });
 
-  it("neverClosed renders a gate-failure (close) PR as HELD, not 'Closed' (#8/#9)", () => {
+  it("neverClosed renders a gate-failure (close) PR as HELD, not reject/close (#8/#9)", () => {
     const args = { gate: gate({ conclusion: "failure" }), panelRows, readinessTotal: 40, changedFiles: 2, mergeReadiness: { ciState: "passed" as const }, footerMarkdown: footer };
-    // A contributor close → the red "Closed" headline.
+    // A contributor close → the red reject/close recommendation.
     const closed = buildUnifiedCommentBody(args);
-    expect(closed).toContain("Closed");
-    // The SAME verdict on an owner / automation-bot PR (never auto-closed) renders held, not Closed.
+    expect(closed).toContain("Suggested Action - Reject/Close");
+    // The SAME verdict on an owner / automation-bot PR (never auto-closed) renders held, not reject/close.
     const held = buildUnifiedCommentBody({ ...args, neverClosed: true });
     expect(held).toContain("> [!WARNING]");
-    expect(held).toContain("Held for maintainer review");
-    expect(held).not.toContain("Closed");
+    expect(held).toContain("Suggested Action - Manual Review");
+    expect(held).not.toContain("Suggested Action - Reject/Close");
   });
 });
 
@@ -351,11 +364,11 @@ describe("buildUnifiedCommentBody", () => {
 describe("reconciliation invariant: comment tone is pinned to the gate conclusion (#1016)", () => {
   // gate conclusion → the alert + the verbatim headline phrase the renderer must emit for that conclusion.
   const cases: Array<{ conclusion: GateCheckEvaluation["conclusion"]; alert: string; headline: RegExp }> = [
-    { conclusion: "success", alert: "> [!TIP]", headline: /Approved/ }, // success → merge → ready
-    { conclusion: "failure", alert: "> [!CAUTION]", headline: /Closed|Blocked/ }, // failure → close → blocked
-    { conclusion: "action_required", alert: "> [!WARNING]", headline: /Held for maintainer review/ }, // → manual → held
-    { conclusion: "neutral", alert: "> [!WARNING]", headline: /Held for maintainer review/ }, // → manual → held
-    { conclusion: "skipped", alert: "> [!NOTE]", headline: /Advisory only/ }, // → comment → advisory
+    { conclusion: "success", alert: "> [!TIP]", headline: /Suggested Action - Approve\/Merge/ }, // success → merge → ready
+    { conclusion: "failure", alert: "> [!CAUTION]", headline: /Suggested Action - Reject\/Close/ }, // failure → close → blocked
+    { conclusion: "action_required", alert: "> [!WARNING]", headline: /Suggested Action - Manual Review/ }, // → manual → held
+    { conclusion: "neutral", alert: "> [!WARNING]", headline: /Suggested Action - Manual Review/ }, // → manual → held
+    { conclusion: "skipped", alert: "> [!NOTE]", headline: /Suggested Action - Advisory Only/ }, // → comment → advisory
   ];
 
   for (const { conclusion, alert, headline } of cases) {
@@ -546,7 +559,7 @@ describe("verdictReason on a held/blocked headline (FIX D2)", () => {
       changedFiles: 2,
       footerMarkdown: footer,
     });
-    expect(body).toMatch(/Closed|Blocked/);
+    expect(body).toContain("Suggested Action - Reject/Close");
     expect(body).toContain("A hard blocker was found."); // the gate's authoritative reason on the headline
   });
 
@@ -558,7 +571,7 @@ describe("verdictReason on a held/blocked headline (FIX D2)", () => {
       changedFiles: 2,
       footerMarkdown: footer,
     });
-    expect(body).toContain("Held for maintainer review");
+    expect(body).toContain("Suggested Action - Manual Review");
     expect(body).toContain("Manual maintainer review required.");
   });
 
@@ -581,7 +594,7 @@ describe("verdictReason on a held/blocked headline (FIX D2)", () => {
       changedFiles: 2,
       footerMarkdown: footer,
     });
-    expect(body).toContain("Approved"); // ready headline kept its positive wording…
+    expect(body).toContain("Suggested Action - Approve/Merge"); // ready headline kept its positive wording…
     expect(body).not.toContain("No configured hard blocker was found."); // …the gate summary did NOT replace it
   });
 });

@@ -2790,6 +2790,17 @@ describe("GitHub backfill", () => {
   });
 
   describe("fetchLiveCiAggregate", () => {
+    it("reports unverified without fetching when the head SHA is missing", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", null, "public-token", null);
+
+      expect(aggregate).toEqual({ ciState: "unverified", hasPending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
     it("keeps non-required failing and pending statuses advisory when required contexts are known", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -2799,6 +2810,7 @@ describe("GitHub backfill", () => {
             check_runs: [
               { name: "trusted-required-ci", status: "completed", conclusion: "success" },
               { name: "attacker/non-required-check", status: "completed", conclusion: "failure", output: { title: "Injected failure" } },
+              { name: "attacker/non-required-pending-check", status: "queued", conclusion: null },
             ],
           });
         }
