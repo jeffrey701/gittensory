@@ -152,7 +152,7 @@ def metadata_fallback(metadata: dict) -> dict:
         lines = max(int(entry.get("additions") or 0) + int(entry.get("deletions") or 0), 0)
         if is_test_file(path):
             tests += lines
-        elif path.endswith((".ts", ".tsx", ".js", ".jsx", ".py", ".rb", ".rs", ".go", ".java", ".kt", ".scala", ".sql")):
+        elif path.endswith((".ts", ".tsx", ".js", ".jsx", ".py", ".rb", ".rs", ".go", ".java", ".kt", ".scala", ".sql", ".cs", ".swift", ".groovy")):
             source += lines
         else:
             non_code += lines

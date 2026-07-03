@@ -13,7 +13,7 @@ function isTestFile(file) {
 }
 
 function isCodeFile(file) {
-  return /\.(ts|tsx|js|jsx|py|rb|rs|kt|scala|java|go|sql)$/i.test(file) && !isTestFile(file);
+  return /\.(ts|tsx|js|jsx|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy)$/i.test(file) && !isTestFile(file);
 }
 
 function lineCount(file) {
