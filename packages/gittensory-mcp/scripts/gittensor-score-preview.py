@@ -8,8 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
+
+# JVM/.NET/Swift PascalCase test-class suffix (case-sensitive, on the original
+# path) so C#/Swift/Groovy tests aren't counted as source once their extensions
+# are recognized as code. Matches the signal classifiers' isTestPath rule.
+_JVM_TEST_SUFFIX_RE = re.compile(r"(?:Tests?|Spec)\.(?:java|kt|kts|scala|cs|swift|groovy)$")
 
 
 def is_test_file(path: str) -> bool:
@@ -40,6 +46,8 @@ def is_test_file(path: str) -> bool:
         ".spec.rb",
         ".spec.rs",
     )
+    if _JVM_TEST_SUFFIX_RE.search(path):
+        return True
     return any(token in lowered for token in patterns) or any(basename.endswith(suffix) for suffix in ("_test.go", "_test.py", "_test.rb"))
 
 
