@@ -126,6 +126,14 @@ const LOCKFILE_NAMES: ReadonlySet<string> = new Set([
   "pdm.lock",
   "conan.lock",
   "pixi.lock",
+  // More ecosystems' resolved-dependency lockfiles, siblings to the above: a
+  // committed lockfile is generated, not hand-authored contributor effort.
+  "cartfile.resolved", // Carthage (Swift/Obj-C)
+  "gopkg.lock", // dep (legacy Go)
+  "shard.lock", // Shards (Crystal)
+  "rebar.lock", // rebar3 (Erlang)
+  "renv.lock", // renv (R)
+  "chart.lock", // Helm charts
 ]);
 
 const DEPENDENCY_MANIFEST_NAMES: ReadonlySet<string> = new Set([

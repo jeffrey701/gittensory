@@ -106,6 +106,13 @@ describe("isLockfile", () => {
       "pdm.lock",
       "conan.lock",
       "pixi.lock",
+      "Cartfile.resolved",
+      "ios/Cartfile.resolved",
+      "Gopkg.lock",
+      "shard.lock",
+      "rebar.lock",
+      "renv.lock",
+      "charts/app/Chart.lock",
     ]) {
       expect(isLockfile(path)).toBe(true);
     }
