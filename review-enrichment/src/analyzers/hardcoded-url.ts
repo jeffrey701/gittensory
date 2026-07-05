@@ -15,7 +15,12 @@ const CONFIG_PATH_RE =
 const HTTP_URL_RE = /https?:\/\/[^\s'"\`<>]+/gi;
 const IP_ENDPOINT_RE = /\b(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}\b/g;
 
-const ALLOWLISTED_HOSTS = new Set(["localhost", "127.0.0.1", "example.com"]);
+const ALLOWLISTED_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "example.com",
+]);
 
 function isConfigPath(path: string): boolean {
   return CONFIG_PATH_RE.test(path);

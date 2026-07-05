@@ -31,6 +31,8 @@ test("detectHardcodedUrl: allowlists localhost, 127.0.0.1, and example.com", () 
   assert.equal(detectHardcodedUrl("fetch('http://127.0.0.1:8080')"), null);
   assert.equal(detectHardcodedUrl("fetch('https://api.example.com/v1')"), null);
   assert.equal(detectHardcodedUrl("fetch('https://docs.staging.example.com')"), null);
+  // 0.0.0.0 is the unspecified/localhost bind address — a placeholder, not a real endpoint.
+  assert.equal(detectHardcodedUrl("fetch('http://0.0.0.0:8080')"), null);
 });
 
 test("detectHardcodedUrl: skips comment and import lines", () => {
