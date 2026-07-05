@@ -43,6 +43,9 @@ test("isMagicNumberSourcePath: accepts non-test source extensions used by REES a
     "src/app.cpp",
     "src/app.h",
     "src/app.hpp",
+    "src/app.cxx",
+    "src/app.hxx",
+    "src/app.hh",
   ]) {
     assert.equal(isMagicNumberSourcePath(path), true, path);
   }

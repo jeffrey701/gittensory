@@ -37,6 +37,9 @@ const SOURCE_EXTS = new Set([
   "cpp",
   "h",
   "hpp",
+  "cxx",
+  "hxx",
+  "hh",
 ]);
 
 const NAMED_CONST_RE =
