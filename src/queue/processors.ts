@@ -358,11 +358,13 @@ import {
   buildFocusManifestGuidance,
   composeRepoReviewContext,
   filterReviewFilesForAi,
+  resolvePullRequestAutoReviewSkipReason,
   resolveRepoEnrichmentToggles,
   resolveReviewPathInstructions,
   resolveReviewPreMergeChecks,
   resolveReviewPromptOverrides,
   type FocusManifestFinding,
+  type FocusManifest,
   type ReviewPathInstruction,
   type ReviewProfile,
 } from "../signals/focus-manifest";
@@ -6241,6 +6243,76 @@ export function shouldRequirePublicAiReviewForAdvisory(
   return true;
 }
 
+/** Record a quiet auto-review skip (never a gate failure). Exported for unit tests. (#1954) */
+export async function auditPullRequestAutoReviewSkip(
+  env: Env,
+  args: {
+    actor: string | null;
+    repoFullName: string;
+    pullNumber: number;
+    deliveryId: string;
+    headSha: string | null | undefined;
+    skipReason: string;
+  },
+): Promise<void> {
+  await recordAuditEvent(env, {
+    eventType: "github_app.ai_review_auto_review_skipped",
+    actor: args.actor,
+    targetKey: `${args.repoFullName}#${args.pullNumber}`,
+    outcome: "completed",
+    detail: args.skipReason,
+    metadata: { deliveryId: args.deliveryId, repoFullName: args.repoFullName, headSha: args.headSha ?? null },
+  }).catch(() => undefined);
+}
+
+/** Resolve auto-review eligibility for a PR, loading the manifest only when cheaper skip predicates pass. (#1954) */
+export async function resolveAutoReviewSkipForPullRequest(
+  env: Env,
+  args: {
+    authorBlacklisted: boolean;
+    isFrozenForManualReview: boolean;
+    forceAiReview?: boolean | undefined;
+    repoFullName: string;
+    pr: { isDraft?: boolean | null; title: string; baseRef?: string | null; number: number };
+    author: string | null;
+    deliveryId: string;
+    headSha: string | null | undefined;
+  },
+): Promise<{ skipReason: string | null; reviewManifest: FocusManifest | null }> {
+  if (args.authorBlacklisted || args.isFrozenForManualReview) {
+    return { skipReason: null, reviewManifest: null };
+  }
+  const reviewManifest = await loadRepoFocusManifest(env, args.repoFullName).catch(() => null);
+  const skipReason = resolvePullRequestAutoReviewSkipReason({
+    forceAiReview: args.forceAiReview,
+    manifest: reviewManifest,
+    isDraft: args.pr.isDraft === true,
+    author: args.author,
+    title: args.pr.title,
+    baseRef: args.pr.baseRef ?? null,
+  });
+  if (skipReason) {
+    await auditPullRequestAutoReviewSkip(env, {
+      actor: args.author,
+      repoFullName: args.repoFullName,
+      pullNumber: args.pr.number,
+      deliveryId: args.deliveryId,
+      headSha: args.headSha,
+      skipReason,
+    });
+  }
+  return { skipReason, reviewManifest };
+}
+
+/** Reuse a cached review manifest when present; otherwise load fail-safely for the AI review pass. (#1954) */
+export async function resolveReviewManifestForAiReview(
+  env: Env,
+  repoFullName: string,
+  cachedManifest: FocusManifest | null,
+): Promise<FocusManifest | null> {
+  return cachedManifest ?? (await loadRepoFocusManifest(env, repoFullName).catch(() => null));
+}
+
 async function resolveReviewEnrichmentGithubToken(
   env: Env,
   repoFullName: string,
@@ -7914,9 +7986,25 @@ async function maybePublishPrPublicSurface(
       !authorIsExemptFromFreeze &&
       manualReviewLabel !== null &&
       pr.labels.some((label) => label.toLowerCase() === manualReviewLabel.toLowerCase());
+    let reviewManifestForAutoReview: FocusManifest | null = null;
+    let autoReviewSkipReason: string | null = null;
+    ({
+      skipReason: autoReviewSkipReason,
+      reviewManifest: reviewManifestForAutoReview,
+    } = await resolveAutoReviewSkipForPullRequest(env, {
+      authorBlacklisted,
+      isFrozenForManualReview,
+      forceAiReview: webhook.forceAiReview,
+      repoFullName,
+      pr: { number: pr.number, title: pr.title, baseRef: pr.baseRef ?? null, isDraft: pr.isDraft ?? null },
+      author,
+      deliveryId: webhook.deliveryId,
+      headSha: advisory.headSha ?? null,
+    }));
     const aiReviewWillRun =
       !authorBlacklisted &&
       !isFrozenForManualReview &&
+      !autoReviewSkipReason &&
       (await shouldStartAiReviewForAdvisory(env, {
         settings,
         advisory,
@@ -8033,7 +8121,7 @@ async function maybePublishPrPublicSurface(
           agent: "dual-ai",
         },
         async () => {
-          const reviewManifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
+          const reviewManifest = await resolveReviewManifestForAiReview(env, repoFullName, reviewManifestForAutoReview);
           // `.gittensory.yml` review.profile + review.security_focus + review.path_instructions +
           // review.exclude_paths + review.path_filters (#review-profile / #review-security-focus /
           // #review-path-instructions / #review-exclude-paths / #2043): resolve from the manifest (cached from
