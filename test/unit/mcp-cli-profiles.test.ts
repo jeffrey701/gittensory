@@ -57,6 +57,41 @@ describe("gittensory-mcp CLI — profiles", () => {
     expect(JSON.stringify(list)).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
   }, 45_000);
 
+  it("profile list --format ndjson streams one JSON object per profile (and --json stays pretty)", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    const configPath = join(tempDir, "config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          apiUrl: "https://api.example.test",
+          activeProfile: "beta",
+          profiles: {
+            default: { session: { token: "default-session-token", login: "default-user", scopes: [] } },
+            beta: { session: { token: "beta-session-token", login: "beta-user", scopes: [] } },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const env = { GITTENSORY_CONFIG_DIR: tempDir, GITTENSORY_SKIP_NPM_VERSION_CHECK: "true" };
+
+    const lines = run(["profile", "list", "--format", "ndjson"], env).trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const parsed = lines.map((line) => JSON.parse(line) as { name: string; active?: boolean });
+    expect(parsed.map((p) => p.name).sort()).toEqual(["beta", "default"]);
+    // Each line is a bare profile object — not the {activeProfile, profiles} wrapper — and leaks no token.
+    for (const line of lines) {
+      expect(line).not.toContain("activeProfile");
+      expect(line).not.toContain("session-token");
+    }
+    // --json still returns the pretty wrapper object (unchanged behavior).
+    const pretty = JSON.parse(run(["profile", "list", "--json"], env)) as { activeProfile: string; profiles: unknown[] };
+    expect(pretty).toMatchObject({ activeProfile: "beta" });
+    expect(pretty.profiles).toHaveLength(2);
+  });
+
   it("keeps environment tokens ahead of active profile sessions", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
     const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
