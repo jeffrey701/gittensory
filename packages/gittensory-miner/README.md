@@ -41,6 +41,12 @@ The package also includes an append-only prediction ledger: `initPredictionLedge
 codes, plus the producing `ENGINE_VERSION`) in local SQLite, so a later self-improve pass can score predictions
 against realized outcomes. Insert-only. (#4263)
 
+The package also includes a local PR-outcome writer: `recordPrOutcomeSnapshot` / `readPrOutcomes` /
+`normalizePrOutcomePayload` persist the miner's own merged/closed outcome for each of its own PRs to the local
+event ledger (a `closed` decision may carry one `REJECTION_REASONS` reason bucket). This is the laptop-mode,
+webhook-free counterpart to the server-side `recordPrOutcome`, so a later self-improve pass can pair a
+prediction with its realized outcome. Insert-only. (#4274)
+
 ## Install
 
 See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md) for the `.gittensory-miner.yml` field reference and [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) at the repo root.
