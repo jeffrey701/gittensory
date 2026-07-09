@@ -248,6 +248,21 @@ export {
   type ParsedFleetRunManifest,
 } from "./fleet-run-manifest.js";
 export {
+  DISCOVERY_INDEX_CONTRACT_VERSION,
+  DISCOVERY_INDEX_FORBIDDEN_FIELDS,
+  discoveryIndexBoundaryViolations,
+  normalizeDiscoveryIndexCandidate,
+  normalizeDiscoveryIndexRequest,
+  normalizeDiscoveryIndexResponse,
+  type DiscoveryIndexAiPolicySource,
+  type DiscoveryIndexCandidate,
+  type DiscoveryIndexQuery,
+  type DiscoveryIndexRequest,
+  type DiscoveryIndexResponse,
+  type ParsedDiscoveryIndexRequest,
+  type ParsedDiscoveryIndexResponse,
+} from "./discovery-index-contract.js";
+export {
   computeMetadataLaneFit,
   computeMinerGoalLaneFit,
   isMinerRepoTargetable,
