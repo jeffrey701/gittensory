@@ -36,6 +36,12 @@ The package also includes an append-only event ledger: `initEventLedger` / `appe
 immutable miner-loop events in local SQLite for contributor audit. Insert-only — rows are never updated or
 deleted. (#2322)
 
+On top of that ledger, the miner records the outcome of its OWN PRs: `recordPrOutcomeSnapshot` / `readPrOutcomes`
+(`pr-outcome.js`) append and reduce `pr_outcome` events (a `merged`/`closed` decision, with an optional
+`REJECTION_REASONS` bucket on a close). This is the miner's local bookkeeping only — DISTINCT from the
+server-side `recordPrOutcome` (`src/review/outcomes-wire.ts`), which writes hosted-D1 ground truth from the
+App's webhook stream; same concept name, different codebase layer, no shared code. (#4274)
+
 ## Install
 
 See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md) for the `.gittensory-miner.yml` field reference and [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) at the repo root.
