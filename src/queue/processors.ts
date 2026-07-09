@@ -10578,6 +10578,15 @@ async function maybePublishPrPublicSurface(
           ...(detail.detailsUrl ? { detailsUrl: detail.detailsUrl } : {}),
         }),
       );
+      // Non-required-but-red checks (#4414-class advisory holds): surfaced so a flagged check is never silently
+      // invisible, but never folded into failingChecks/failingDetails -- those two drive ciState/close.
+      const nonRequiredFailingDetails: CheckFailureDetail[] = liveCi.nonRequiredFailingDetails.map(
+        (detail) => ({
+          name: detail.name,
+          ...(detail.summary ? { summary: detail.summary } : {}),
+          ...(detail.detailsUrl ? { detailsUrl: detail.detailsUrl } : {}),
+        }),
+      );
       const mergeReadiness: MergeReadiness = {
         ciState,
         ...(mergeStateLabel ? { mergeStateLabel } : {}),
@@ -10585,6 +10594,7 @@ async function maybePublishPrPublicSurface(
           ? { failingChecks: failingDetails.map((detail) => detail.name) }
           : {}),
         ...(failingDetails.length > 0 ? { failingDetails } : {}),
+        ...(nonRequiredFailingDetails.length > 0 ? { nonRequiredFailingDetails } : {}),
       };
       // The public comment must match the authoritative Gate check-run conclusion.
       const commentGate = gateEvaluation;

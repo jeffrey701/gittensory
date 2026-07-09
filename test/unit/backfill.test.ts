@@ -4237,6 +4237,99 @@ describe("GitHub backfill", () => {
       expect(aggregate.failingDetails).toEqual([{ name: "Contributor trust" }]);
     });
 
+    it("a third-party app's COMPLETED action_required check-run that IS a required context carries its summary/detailsUrl into failingDetails", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              { name: "coverage", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+              {
+                name: "Contributor trust",
+                status: "completed",
+                conclusion: "action_required",
+                app: { slug: "superagent-security" },
+                output: { title: "Manual review needed" },
+                details_url: "https://superagent.example/checks/contributor-trust",
+              },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/awesome-claude", "sha4729", "public-token", new Set(["coverage", "Contributor trust"]));
+
+      expect(aggregate.ciState).toBe("failed");
+      expect(aggregate.failingDetails).toEqual([
+        { name: "Contributor trust", summary: "Manual review needed", detailsUrl: "https://superagent.example/checks/contributor-trust" },
+      ]);
+    });
+
+    it("a third-party app's COMPLETED action_required check-run that is NOT a required context is held as a non-blocking advisory, never auto-closing the PR (#4414-regression)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              { name: "validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+              { name: "Superagent Security Scan", status: "completed", conclusion: "success", app: { slug: "superagent-security" } },
+              {
+                name: "Contributor trust",
+                status: "completed",
+                conclusion: "action_required",
+                app: { slug: "superagent-security" },
+                output: { title: "Manual review needed" },
+                details_url: "https://superagent.example/checks/contributor-trust",
+              },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+        return new Response("not found", { status: 404 });
+      });
+
+      // Matches real branch protection: only "validate" + "Superagent Security Scan" are required contexts --
+      // "Contributor trust" is a SEPARATE, never-required check-run posted by the same app.
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "sha9001", "public-token", new Set(["validate", "Superagent Security Scan"]));
+
+      expect(aggregate.ciState).toBe("passed");
+      expect(aggregate.hasPending).toBe(false);
+      expect(aggregate.failingDetails).toEqual([]);
+      expect(aggregate.nonRequiredFailingDetails).toEqual([
+        { name: "Contributor trust", summary: "Manual review needed", detailsUrl: "https://superagent.example/checks/contributor-trust" },
+      ]);
+    });
+
+    it("a non-required third-party action_required check-run with no output/details_url still lands in nonRequiredFailingDetails, bare (name-only)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              { name: "validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+              { name: "Contributor trust", status: "completed", conclusion: "action_required", app: { slug: "superagent-security" } },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "sha9002", "public-token", new Set(["validate"]));
+
+      expect(aggregate.ciState).toBe("passed");
+      expect(aggregate.failingDetails).toEqual([]);
+      expect(aggregate.nonRequiredFailingDetails).toEqual([{ name: "Contributor trust" }]);
+    });
+
     it("a github-actions workflow awaiting 'Approve and run' (action_required) is still treated as pending, not settled (#fork-action-required)", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {

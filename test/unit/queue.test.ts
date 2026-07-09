@@ -19992,6 +19992,265 @@ describe("queue processors", () => {
     expect(postedBody).not.toMatch(/wallet|hotkey|reward|trust score/i);
   });
 
+  // REGRESSION (#4414-class advisory holds): a third-party app's COMPLETED action_required check-run that is
+  // NOT a branch-protection required context (e.g. Superagent's "Contributor trust", posted alongside its own
+  // separate, actually-required "Superagent Security Scan") must never flip ciState to "failed" or post under
+  // "CI checks failing" -- that auto-closes real contributor PRs (#4414's regression). It must still be VISIBLE,
+  // under its own non-blocking "Flagged checks" section, so a maintainer can act on it without the PR being
+  // silently waved through OR silently closed.
+  it("REGRESSION (#4414-class advisory holds): a non-required third-party action_required check renders as a non-blocking 'Flagged checks' note, not a CI failure", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITHUB_PUBLIC_TOKEN: "public-token", GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled",
+      backfillEnabled: true,
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 6,
+      title: "Fix flaky retry test",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      head: { sha: "flagged456" },
+      base: { ref: "main" },
+      labels: [{ name: "bug" }],
+      body: "Fixes #1\n\nValidation: npm test",
+    });
+    let postedBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/6/files")) return Response.json([{ filename: "src/retry.ts", additions: 3, deletions: 1, status: "modified", patch: "@@\n+const x = 1;" }]);
+      // Branch protection requires ONLY "validate" + "Superagent Security Scan" -- NOT "Contributor trust",
+      // matching the real-world JSONbored/gittensory config that #4414 broke.
+      if (url.includes("/branches/main/protection/required_status_checks")) return Response.json({ contexts: ["validate", "Superagent Security Scan"] });
+      if (url.includes("/check-runs") && method === "GET") {
+        return Response.json({
+          total_count: 3,
+          check_runs: [
+            { name: "validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+            { name: "Superagent Security Scan", status: "completed", conclusion: "success", app: { slug: "superagent-security" } },
+            {
+              name: "Contributor trust",
+              status: "completed",
+              conclusion: "action_required",
+              app: { slug: "superagent-security" },
+              output: { title: "Manual review needed" },
+              details_url: "https://superagent.example/checks/contributor-trust",
+            },
+          ],
+        });
+      }
+      if (url.includes("/commits/") && url.includes("/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 903 }, { status: 201 });
+      if (url.includes("/check-runs/903") && method === "PATCH") return Response.json({ id: 903 });
+      if (url.includes("/issues/6/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/6/comments") && method === "POST") {
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "pr-flagged-nonrequired-check",
+      eventName: "pull_request",
+      payload: {
+        action: "synchronize",
+        installation: {
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+          events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+        },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 6,
+          title: "Fix flaky retry test",
+          state: "open",
+          user: { login: "oktofeesh1" },
+          head: { sha: "flagged456" },
+          base: { ref: "main" },
+          labels: [{ name: "bug" }],
+          body: "Fixes #1\n\nValidation: npm test",
+        },
+      },
+    });
+
+    // Never a CI failure -- the non-required check must not flip ciState/block the PR.
+    expect(postedBody).not.toContain("`CI failing`");
+    expect(postedBody).not.toContain("CI checks failing");
+    // But never silently invisible either -- surfaced as its own non-blocking note, with its per-check WHY.
+    expect(postedBody).toContain("Flagged checks (non-blocking)");
+    expect(postedBody).toContain("Contributor trust");
+    expect(postedBody).toContain("Manual review needed");
+    expect(postedBody).not.toMatch(/wallet|hotkey|reward|trust score/i);
+  });
+
+  it("REGRESSION (#4414-class advisory holds): a bare non-required action_required check (no output/details_url) still renders under 'Flagged checks', name-only", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITHUB_PUBLIC_TOKEN: "public-token", GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled",
+      backfillEnabled: true,
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 7,
+      title: "Bump lockfile",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      head: { sha: "flagged457" },
+      base: { ref: "main" },
+      labels: [{ name: "bug" }],
+      body: "Fixes #1\n\nValidation: npm test",
+    });
+    let postedBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          { uid: 7, githubUsername: "oktofeesh1", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1, hotkey: "must-not-leak" },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "package-lock.json", additions: 2, deletions: 2, status: "modified", patch: "@@\n+1" }]);
+      if (url.includes("/branches/main/protection/required_status_checks")) return Response.json({ contexts: ["validate", "Superagent Security Scan"] });
+      if (url.includes("/check-runs") && method === "GET") {
+        return Response.json({
+          total_count: 3,
+          check_runs: [
+            { name: "validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+            { name: "Superagent Security Scan", status: "completed", conclusion: "success", app: { slug: "superagent-security" } },
+            // Bare: no output, no details_url -- the common real-world shape for a check-run with nothing to say.
+            { name: "Contributor trust", status: "completed", conclusion: "action_required", app: { slug: "superagent-security" } },
+          ],
+        });
+      }
+      if (url.includes("/commits/") && url.includes("/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 904 }, { status: 201 });
+      if (url.includes("/check-runs/904") && method === "PATCH") return Response.json({ id: 904 });
+      if (url.includes("/issues/7/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/7/comments") && method === "POST") {
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "pr-flagged-nonrequired-check-bare",
+      eventName: "pull_request",
+      payload: {
+        action: "synchronize",
+        installation: {
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+          events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+        },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 7,
+          title: "Bump lockfile",
+          state: "open",
+          user: { login: "oktofeesh1" },
+          head: { sha: "flagged457" },
+          base: { ref: "main" },
+          labels: [{ name: "bug" }],
+          body: "Fixes #1\n\nValidation: npm test",
+        },
+      },
+    });
+
+    expect(postedBody).not.toContain("CI checks failing");
+    expect(postedBody).toContain("Flagged checks (non-blocking)");
+    expect(postedBody).toContain("- Contributor trust");
+  });
+
   it("skips bots and maintainer authors, and keeps explicitly enabled checks minimal", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(

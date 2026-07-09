@@ -2775,6 +2775,8 @@ async function reduceLiveCiAggregate(
   // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks). Deduped by check-run identity first, so a
   // re-run job's stale duplicate entry can never contribute its own failingDetails/pending signal alongside the
   // current one, without collapsing unrelated checks that merely share a display name.
+  const checkRunSummary = (run: LiveCiCheckRun): string | undefined =>
+    [run.output?.title, run.output?.summary].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim().slice(0, 200);
   for (const run of dedupeLatestCheckRunsByIdentity(checkRuns)) {
     seenContextNames.add(run.name); // mark BEFORE bot-check skip: a bot-owned required context is "seen"
     const appSlug = (run.app?.slug ?? "").toLowerCase();
@@ -2784,13 +2786,25 @@ async function reduceLiveCiAggregate(
     const conclusion = (run.conclusion ?? "").toLowerCase();
     const status = (run.status ?? "").toLowerCase();
     // A THIRD-PARTY app's OWN action_required verdict on an already-COMPLETED check-run (for example, a
-    // security/check tool asking for human review) is a settled, terminal adverse result. This is NOT the
-    // github-actions "awaiting maintainer Approve and run" case the action_required exclusion above exists for:
-    // non-Actions apps use their own conclusion as a policy signal, so fail closed instead of treating it as
-    // green CI. Conservative: an unknown/absent app slug is NOT treated as third-party here.
-    const isThirdPartyActionRequiredFailure = conclusion === "action_required" && status === "completed" && appSlug !== "" && appSlug !== "github-actions";
-    if (isThirdPartyActionRequiredFailure || (conclusion ? CI_FAILING_CONCLUSIONS.has(conclusion) : false)) {
-      const summary = [run.output?.title, run.output?.summary].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim().slice(0, 200);
+    // security/check tool asking for human review) is a settled, terminal adverse result -- but ONLY when that
+    // check is actually a REQUIRED context. A non-required third-party check must never hard-fail/auto-close the
+    // PR on its own say-so: the same app can post multiple check-runs (e.g. a required "X Security Scan" plus a
+    // separate, NEVER-required "X Contributor trust" advisory check), and treating either one's action_required
+    // the same way conflates them (#4414 regressed exactly this -- a non-required advisory check started
+    // auto-closing real contributor PRs). This is NOT the github-actions "awaiting maintainer Approve and run"
+    // case the action_required exclusion above exists for: non-Actions apps use their own conclusion as a policy
+    // signal. Conservative: an unknown/absent app slug is NOT treated as third-party here.
+    const isThirdPartyActionRequired = conclusion === "action_required" && status === "completed" && appSlug !== "" && appSlug !== "github-actions";
+    if (isThirdPartyActionRequired && isRequired(run.name)) {
+      const summary = checkRunSummary(run);
+      failingDetails.push({ name: run.name, ...(summary ? { summary } : {}), ...(run.details_url ? { detailsUrl: run.details_url } : {}) });
+    } else if (isThirdPartyActionRequired) {
+      // Non-required: visible (never silently folded into "passed" either, unlike the pre-#4414 behavior) but
+      // non-blocking -- routed to nonRequiredFailingDetails, which never feeds ciState or a close decision.
+      const summary = checkRunSummary(run);
+      nonRequiredFailingDetails.push({ name: run.name, ...(summary ? { summary } : {}), ...(run.details_url ? { detailsUrl: run.details_url } : {}) });
+    } else if (conclusion ? CI_FAILING_CONCLUSIONS.has(conclusion) : false) {
+      const summary = checkRunSummary(run);
       failingDetails.push({ name: run.name, ...(summary ? { summary } : {}), ...(run.details_url ? { detailsUrl: run.details_url } : {}) });
     } else if (conclusion ? CI_PASSING_CONCLUSIONS.has(conclusion) : status === "completed") {
       // concluded and not failing → passing
