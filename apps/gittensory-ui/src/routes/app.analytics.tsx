@@ -13,6 +13,8 @@ import { GatePrecisionCard } from "@/components/site/app-panels/gate-precision-c
 import type { GateEvalReport } from "@/components/site/app-panels/gate-precision-card-model";
 import { CycleTimeCard } from "@/components/site/app-panels/cycle-time-card";
 import type { CycleTimeAggregate } from "@/components/site/app-panels/cycle-time-card-model";
+import { ReversalHealthCard } from "@/components/site/app-panels/reversal-health-card";
+import type { ReversalHealthReport } from "@/components/site/app-panels/reversal-health-card-model";
 import { useApiResource } from "@/lib/api/use-api-resource";
 
 export const Route = createFileRoute("/app/analytics")({
@@ -104,6 +106,7 @@ type OperatorDashboard = {
   upstreamDrift?: { status?: string; openReportCount?: number } | null;
   gateEval?: GateEvalReport;
   cycleTime?: CycleTimeAggregate;
+  agentHealth?: ReversalHealthReport;
 };
 
 function ProductAnalytics() {
@@ -187,6 +190,8 @@ function ProductAnalytics() {
           {data.gateEval ? <GatePrecisionCard report={data.gateEval} /> : null}
 
           {data.cycleTime ? <CycleTimeCard cycleTime={data.cycleTime} /> : null}
+
+          {data.agentHealth ? <ReversalHealthCard health={data.agentHealth} /> : null}
 
           {data.usageSummary ? (
             <ProductUsageBreakdownPanel
