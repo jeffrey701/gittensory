@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { computeImpactMap, MAX_AFFECTED_MODULES_PER_ENTRY, MAX_IMPACT_MAP_INPUT_FILES } from "../../src/review/impact-map";
+import { computeImpactMap, impactMapQueryFingerprint, MAX_AFFECTED_MODULES_PER_ENTRY, MAX_IMPACT_MAP_INPUT_FILES } from "../../src/review/impact-map";
 import * as repositoriesModule from "../../src/db/repositories";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import type { FileChangedSymbols } from "../../src/review/impact-symbols";
@@ -516,5 +516,35 @@ describe("computeImpactMap", () => {
 
       expect(await auditEvent(env, "github_app.impact_map_cache_miss", "no-owner-repo")).toMatchObject({ outcome: "completed" });
     });
+  });
+});
+
+describe("impactMapQueryFingerprint", () => {
+  const base = { topK: 5, minScore: 0.4, reranker: "bm25" };
+
+  it("does not collide two distinct inputs across the field delimiters", async () => {
+    // Under the old "|"-join, {queryText:"a|b", excludePaths:["c"]} and {queryText:"a", excludePaths:["b|c"]}
+    // both serialized to "a|b|c|5|0.4|bm25" -- a cache-key collision that would replay one query's cached
+    // result for a genuinely different query. A "," inside an excludePath collided the same way.
+    const a = await impactMapQueryFingerprint({ queryText: "a|b", excludePaths: ["c"], ...base });
+    const b = await impactMapQueryFingerprint({ queryText: "a", excludePaths: ["b|c"], ...base });
+    const c = await impactMapQueryFingerprint({ queryText: "a", excludePaths: ["x", "y"], ...base });
+    const d = await impactMapQueryFingerprint({ queryText: "a", excludePaths: ["x,y"], ...base });
+    expect(a).not.toBe(b);
+    expect(c).not.toBe(d);
+  });
+
+  it("is independent of excludePaths order (no spurious cache miss)", async () => {
+    const forward = await impactMapQueryFingerprint({ queryText: "q", excludePaths: ["a", "b"], ...base });
+    const reversed = await impactMapQueryFingerprint({ queryText: "q", excludePaths: ["b", "a"], ...base });
+    expect(forward).toBe(reversed);
+  });
+
+  it("changes when any retrieval parameter changes", async () => {
+    const ref = await impactMapQueryFingerprint({ queryText: "q", excludePaths: [], ...base });
+    expect(await impactMapQueryFingerprint({ queryText: "q2", excludePaths: [], ...base })).not.toBe(ref);
+    expect(await impactMapQueryFingerprint({ queryText: "q", excludePaths: [], ...base, topK: 6 })).not.toBe(ref);
+    expect(await impactMapQueryFingerprint({ queryText: "q", excludePaths: [], ...base, minScore: 0.5 })).not.toBe(ref);
+    expect(await impactMapQueryFingerprint({ queryText: "q", excludePaths: [], ...base, reranker: "none" })).not.toBe(ref);
   });
 });

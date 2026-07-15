@@ -73,14 +73,26 @@ function impactMapQueryCacheCutoffIso(): string {
  *  are constants for this module's own calls, but are still hashed (not assumed) so this function stays
  *  correct if a future caller ever varies them. excludePaths is sorted before hashing so argument order never
  *  causes a spurious cache miss. */
-async function impactMapQueryFingerprint(input: {
+export async function impactMapQueryFingerprint(input: {
   queryText: string;
   excludePaths: string[];
   topK: number;
   minScore: number;
   reranker: string;
 }): Promise<string> {
-  const payload = [input.queryText, [...input.excludePaths].sort().join(","), String(input.topK), String(input.minScore), input.reranker].join("|");
+  // Structurally-delimited payload (mirrors linked-issue-satisfaction-cache-input.ts / ai-slop-cache-input.ts):
+  // a bare "|"-join let an unescaped "|" inside queryText -- or the "," that separates excludePaths -- shift a
+  // field boundary, so two genuinely different inputs could serialize identically and collide on one
+  // fingerprint (e.g. {queryText:"a|b", excludePaths:["c"]} and {queryText:"a", excludePaths:["b|c"]} both
+  // became "a|b|c|..."). A JSON payload escapes every field, so distinct inputs always produce distinct
+  // fingerprints. excludePaths stays sorted so argument order never causes a spurious cache miss.
+  const payload = JSON.stringify({
+    queryText: input.queryText,
+    excludePaths: [...input.excludePaths].sort(),
+    topK: input.topK,
+    minScore: input.minScore,
+    reranker: input.reranker,
+  });
   return sha256Hex(payload);
 }
 
