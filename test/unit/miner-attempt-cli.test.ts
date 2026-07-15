@@ -1601,3 +1601,126 @@ describe("runAttempt: real claim-ledger wiring (#5393)", () => {
     captureSpy.mockRestore();
   });
 });
+
+describe("runAttempt: maxConcurrentClaims enforcement (#6056)", () => {
+  it("REGRESSION: rejects a new claim when the repo cap is already met (default maxConcurrentClaims: 1)", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    claimLedger.claimIssue("acme/widgets", 99, "other-attempt");
+    const claimIssueSpy = vi.spyOn(claimLedger, "claimIssue");
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({
+        runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }),
+      }),
+    });
+
+    expect(exitCode).toBe(11);
+    expect(claimIssueSpy).not.toHaveBeenCalled();
+    const payload = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(payload).toMatchObject({
+      outcome: "blocked_max_concurrent_claims",
+      reason: "max_concurrent_claims_exceeded",
+      maxConcurrentClaims: 1,
+      activeClaimCount: 1,
+      repoFullName: "acme/widgets",
+      issueNumber: 7,
+    });
+  });
+
+  it("REGRESSION: reports a human-readable message when the cap is already met", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    claimLedger.claimIssue("acme/widgets", 99, "other-attempt");
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions(),
+    });
+
+    expect(exitCode).toBe(11);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("maxConcurrentClaims cap (1) is already met (1 active claim(s))"),
+    );
+  });
+
+  it("REGRESSION: honors --json on the maxConcurrentClaims rejection path", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    const onResult = vi.fn();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    claimLedger.claimIssue("acme/widgets", 99, "other-attempt");
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions(),
+      onResult,
+    });
+
+    expect(exitCode).toBe(11);
+    expect(onResult).toHaveBeenLastCalledWith(expect.objectContaining({ outcome: "blocked_max_concurrent_claims" }));
+  });
+
+  it("REGRESSION: proceeds when active claims are below the configured cap", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const claimIssueSpy = vi.spyOn(claimLedger, "claimIssue");
+    claimLedger.claimIssue("acme/widgets", 99, "other-attempt");
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({
+        resolveMinerGoalSpec: () => ({
+          present: true,
+          spec: { ...DEFAULT_MINER_GOAL_SPEC, maxConcurrentClaims: 2 },
+          warnings: [],
+        }),
+        runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }),
+      }),
+    });
+
+    expect(exitCode).toBe(7);
+    expect(claimIssueSpy).toHaveBeenCalledWith("acme/widgets", 7, expect.stringMatching(/^attempt:/));
+  });
+
+  it("REGRESSION: proceeds with the default cap when there are zero prior active claims", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const claimIssueSpy = vi.spyOn(claimLedger, "claimIssue");
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({
+        runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }),
+      }),
+    });
+
+    expect(exitCode).toBe(7);
+    expect(claimIssueSpy).toHaveBeenCalledWith("acme/widgets", 7, expect.stringMatching(/^attempt:/));
+  });
+});
