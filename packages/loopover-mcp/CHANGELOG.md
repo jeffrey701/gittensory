@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.0.0](https://github.com/jeffrey701/gittensory/compare/mcp-v1.0.0...mcp-v2.0.0) (2026-07-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **build:** every gittensory-prefixed directory under apps/ and packages/ is now loopover-prefixed, and the two extension packages' npm names changed from @jsonbored/gittensory-* to @loopover/*. No dual-path/alias, per the epic's full-cutover mandate.
+
+### Features
+
+* **build:** Phase 5 - full-cutover rename all gittensory-* directories to loopover-* ([#5743](https://github.com/jeffrey701/gittensory/issues/5743)) ([81e4ac3](https://github.com/jeffrey701/gittensory/commit/81e4ac34dfb4dee9c3cadefcc27a515617462da9))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @loopover/engine bumped from ^1.0.0 to ^3.0.0
+
 ## [1.0.0](https://github.com/JSONbored/gittensory/compare/mcp-v0.9.0...mcp-v1.0.0) (2026-07-14)
 
 
