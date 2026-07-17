@@ -654,6 +654,32 @@ describe("rag: upsertChunks (embed + vector upsert + chunk-text store)", () => {
     expect(bindCalls[0]?.at(-1)).toBeNull();
   });
 
+  it("REGRESSION (#6685-followup): strips a NUL byte from chunk text before the storage INSERT (Postgres invalid-byte-sequence crash)", async () => {
+    const vector = { upsert: async () => undefined } as unknown as VectorAdapter;
+    const bindCalls: unknown[][] = [];
+    const storage = {
+      prepare: () => ({
+        bind: (...args: unknown[]) => {
+          bindCalls.push(args);
+          return { run: async () => undefined } as unknown as BoundStatement;
+        },
+      }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    const dirtyChunks: RagChunk[] = [
+      { id: "ns|src/a.ts::0", path: "src/a.ts", chunkIndex: 0, kind: "code", text: "before\u0000after" },
+      { id: "ns|src/b.ts::0", path: "src/b.ts", chunkIndex: 0, kind: "code", text: "clean, no NUL here" },
+    ];
+    const inference: InferenceAdapter = { run: async (_model, opts) => ({ data: (opts.text as string[]).map(() => Array(1024).fill(0.1)) }) };
+
+    const n = await upsertChunks({ storage, vector, inference }, "gittensory", "o/r", dirtyChunks);
+
+    expect(n).toBe(2);
+    // text is the 7th bind() argument -- id, project, repo, path, chunkIndex, kind, text, blobSha.
+    expect(bindCalls[0]?.[6]).toBe("beforeafter"); // the NUL byte is gone, the surrounding text is untouched
+    expect(bindCalls[1]?.[6]).toBe("clean, no NUL here"); // no NUL present -> byte-identical passthrough
+  });
+
   it("returns 0 with no vector / no inference / empty chunks (the fail-safe guard)", async () => {
     const vector = { upsert: async () => undefined } as unknown as VectorAdapter;
     const storage = storageStub();
