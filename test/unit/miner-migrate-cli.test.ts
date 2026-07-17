@@ -24,6 +24,11 @@ const STORE_NAMES = [
   "claim-ledger",
   "run-state",
   "plan-store",
+  // #6768: the four stores that were previously migrated/checked only lazily, never by the proactive sweep.
+  "governor-state",
+  "attempt-log",
+  "replay-snapshot",
+  "worktree-allocator",
 ];
 
 afterEach(() => {

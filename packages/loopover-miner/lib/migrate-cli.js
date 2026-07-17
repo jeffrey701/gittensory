@@ -18,6 +18,10 @@ import { initPredictionLedger, resolvePredictionLedgerDbPath } from "./predictio
 import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "./portfolio-queue.js";
 import { initRunStateStore, resolveRunStateDbPath } from "./run-state.js";
 import { openPlanStore, resolvePlanStoreDbPath } from "./plan-store.js";
+import { openGovernorState, resolveGovernorStateDbPath } from "./governor-state.js";
+import { initAttemptLog, resolveAttemptLogDbPath } from "./attempt-log.js";
+import { openReplaySnapshotStore, resolveReplaySnapshotDbPath } from "./replay-snapshot.js";
+import { openWorktreeAllocator, resolveWorktreeAllocatorDbPath } from "./worktree-allocator.js";
 
 const MIGRATE_USAGE = "Usage: loopover-miner migrate [--json]";
 
@@ -29,6 +33,12 @@ const STORES = [
   { name: "claim-ledger", resolveDbPath: resolveClaimLedgerDbPath, open: openClaimLedger },
   { name: "run-state", resolveDbPath: resolveRunStateDbPath, open: initRunStateStore },
   { name: "plan-store", resolveDbPath: resolvePlanStoreDbPath, open: openPlanStore },
+  { name: "governor-state", resolveDbPath: resolveGovernorStateDbPath, open: openGovernorState },
+  { name: "attempt-log", resolveDbPath: resolveAttemptLogDbPath, open: initAttemptLog },
+  { name: "replay-snapshot", resolveDbPath: resolveReplaySnapshotDbPath, open: openReplaySnapshotStore },
+  // openWorktreeAllocator takes an options object rather than a bare dbPath, so it's adapted to this list's
+  // `open(dbPath)` contract; its other options keep their own documented defaults.
+  { name: "worktree-allocator", resolveDbPath: resolveWorktreeAllocatorDbPath, open: (dbPath) => openWorktreeAllocator({ dbPath }) },
 ];
 
 /** Read a store file's stamped schema version without ever creating it -- matches checkStoreIntegrity's
