@@ -850,6 +850,37 @@ avoids piling duplicate fan-outs). In metrics, break down deferrals by
 `job_type=agent-regate-pr` or `agent-regate-sweep` when GitHub
 rate-limit pressure spikes.
 
+## Self-host maintenance workflow (GitHub Actions)
+
+[`self-host-nightly.yml`](https://github.com/JSONbored/loopover/blob/main/.github/workflows/self-host-nightly.yml)
+is a manual (`workflow_dispatch`) GitHub Actions workflow that checks
+`/ready` against your externally reachable self-host instance and,
+if `INTERNAL_JOB_TOKEN` is configured, triggers a RAG re-index fan-out. It is
+deliberately not scheduled while the review stack runs without colocated
+Actions runners — trigger it by hand from the Actions tab, or wire it into
+your own external scheduler if you want it automated.
+
+It validates a **fleet** of instances, not just one. Each instance is
+modeled as its own [GitHub
+Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+(repo Settings → Environments), carrying that instance's own
+`SELF_HOST_URL` environment variable and `INTERNAL_JOB_TOKEN` environment
+secret — this lets every matrix job read the same secret name while each
+instance supplies its own value, since workflow expressions cannot index
+`secrets.*` by a computed key.
+
+<CodeBlock
+  lang="text"
+  code={`1. Create one GitHub Environment per instance (any name — e.g. "primary", "edge-nl-01").
+2. On each environment, set the SELF_HOST_URL variable and the INTERNAL_JOB_TOKEN secret for that instance.
+3. Set the repo-level SELF_HOST_ENVIRONMENTS variable to a comma-separated list of those environment names,
+   e.g. \`primary,edge-nl-01\`.`}
+/>
+
+A single-instance setup works exactly the same way — one environment, one
+name in the list. The workflow no-ops (skips entirely) when
+`SELF_HOST_ENVIRONMENTS` is unset.
+
 ## Routine checks
 
 - Queue pending count is not growing without processing.
