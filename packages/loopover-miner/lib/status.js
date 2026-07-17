@@ -19,6 +19,10 @@ import { hasGitHubTokenSource } from "./github-token-resolution.js";
 import { resolvePredictionLedgerDbPath } from "./prediction-ledger.js";
 import { resolvePortfolioQueueDbPath } from "./portfolio-queue.js";
 import { resolveClaimLedgerDbPath } from "./claim-ledger.js";
+import { resolveGovernorStateDbPath } from "./governor-state.js";
+import { resolveAttemptLogDbPath } from "./attempt-log.js";
+import { resolveReplaySnapshotDbPath } from "./replay-snapshot.js";
+import { resolveWorktreeAllocatorDbPath } from "./worktree-allocator.js";
 import { resolveRunStateDbPath } from "./run-state.js";
 import { resolvePlanStoreDbPath } from "./plan-store.js";
 
@@ -307,6 +311,10 @@ function storeIntegrityChecks(env) {
     ["claim-ledger", resolveClaimLedgerDbPath(env)],
     ["run-state", resolveRunStateDbPath(env)],
     ["plan-store", resolvePlanStoreDbPath(env)],
+    ["governor-state", resolveGovernorStateDbPath(env)],
+    ["attempt-log", resolveAttemptLogDbPath(env)],
+    ["replay-snapshot", resolveReplaySnapshotDbPath(env)],
+    ["worktree-allocator", resolveWorktreeAllocatorDbPath(env)],
   ];
   return stores.map(([name, dbPath]) => checkStoreIntegrity(`store-integrity:${name}`, dbPath));
 }

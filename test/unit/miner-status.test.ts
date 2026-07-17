@@ -125,6 +125,11 @@ describe("loopover-miner status/doctor (#2288)", () => {
       "store-integrity:claim-ledger",
       "store-integrity:run-state",
       "store-integrity:plan-store",
+      // #6768: doctor's sweep now covers every real local store, not just the original seven.
+      "store-integrity:governor-state",
+      "store-integrity:attempt-log",
+      "store-integrity:replay-snapshot",
+      "store-integrity:worktree-allocator",
     ]);
     expect(runDoctor([], env, cwd)).toBe(0);
     expect(log).toHaveBeenCalled();

@@ -18,6 +18,10 @@ import { initPredictionLedger, resolvePredictionLedgerDbPath } from "./predictio
 import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "./portfolio-queue.js";
 import { initRunStateStore, resolveRunStateDbPath } from "./run-state.js";
 import { openPlanStore, resolvePlanStoreDbPath } from "./plan-store.js";
+import { openGovernorState, resolveGovernorStateDbPath } from "./governor-state.js";
+import { initAttemptLog, resolveAttemptLogDbPath } from "./attempt-log.js";
+import { openReplaySnapshotStore, resolveReplaySnapshotDbPath } from "./replay-snapshot.js";
+import { openWorktreeAllocator, resolveWorktreeAllocatorDbPath, resolveWorktreeBaseDir } from "./worktree-allocator.js";
 
 const MIGRATE_USAGE = "Usage: loopover-miner migrate [--json]";
 
@@ -29,6 +33,18 @@ const STORES = [
   { name: "claim-ledger", resolveDbPath: resolveClaimLedgerDbPath, open: openClaimLedger },
   { name: "run-state", resolveDbPath: resolveRunStateDbPath, open: initRunStateStore },
   { name: "plan-store", resolveDbPath: resolvePlanStoreDbPath, open: openPlanStore },
+  { name: "governor-state", resolveDbPath: resolveGovernorStateDbPath, open: openGovernorState },
+  { name: "attempt-log", resolveDbPath: resolveAttemptLogDbPath, open: initAttemptLog },
+  { name: "replay-snapshot", resolveDbPath: resolveReplaySnapshotDbPath, open: openReplaySnapshotStore },
+  // openWorktreeAllocator takes an options object rather than a bare dbPath, so it is adapted to this list's
+  // open(dbPath, env) contract. worktreeBaseDir is resolved from the SAME env the sweep was handed -- letting it
+  // fall back to openWorktreeAllocator's own process.env default would be identical in production (runMigrateChecks
+  // defaults env to process.env) but would make a caller-supplied env silently seed slots for the wrong base dir.
+  {
+    name: "worktree-allocator",
+    resolveDbPath: resolveWorktreeAllocatorDbPath,
+    open: (dbPath, env) => openWorktreeAllocator({ dbPath, worktreeBaseDir: resolveWorktreeBaseDir(env) }),
+  },
 ];
 
 /** Read a store file's stamped schema version without ever creating it -- matches checkStoreIntegrity's
@@ -68,7 +84,9 @@ function migrateStore({ name, resolveDbPath, open }, env) {
   let versionBefore = null;
   try {
     versionBefore = peekSchemaVersion(dbPath);
-    const store = open(dbPath);
+    // `env` is forwarded so a store whose open needs more than a path (worktree-allocator's base dir) resolves it
+    // from the same env this sweep was handed; every other store's `open(dbPath)` simply ignores the extra arg.
+    const store = open(dbPath, env);
     store.close();
     const versionAfter = peekSchemaVersion(dbPath);
     return {

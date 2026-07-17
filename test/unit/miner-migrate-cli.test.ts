@@ -7,6 +7,11 @@ import { runMigrate, runMigrateChecks } from "../../packages/loopover-miner/lib/
 import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 import { resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/event-ledger.js";
 import { applySchemaMigrations, BASELINE_SCHEMA_VERSION } from "../../packages/loopover-miner/lib/schema-version.js";
+import {
+  openWorktreeAllocator,
+  resolveWorktreeAllocatorDbPath,
+  resolveWorktreeBaseDir,
+} from "../../packages/loopover-miner/lib/worktree-allocator.js";
 
 const roots: string[] = [];
 
@@ -24,6 +29,11 @@ const STORE_NAMES = [
   "claim-ledger",
   "run-state",
   "plan-store",
+  // #6768: the four real stores the sweep previously never touched (migrated/checked only lazily).
+  "governor-state",
+  "attempt-log",
+  "replay-snapshot",
+  "worktree-allocator",
 ];
 
 afterEach(() => {
@@ -193,6 +203,27 @@ describe("loopover-miner migrate (#4871)", () => {
     } finally {
       verifyDb.close();
     }
+  });
+
+  it("#6768: actually OPENS each newly-covered store, bringing an existing worktree-allocator file up to date", () => {
+    const env = tempEnv();
+    // Create the real on-disk file for the store whose `open` needs more than a path, so the sweep takes its
+    // real open/migrate path (not the `existsSync` "skipped" short-circuit that every fresh-env test hits).
+    const allocator = openWorktreeAllocator({
+      dbPath: resolveWorktreeAllocatorDbPath(env),
+      worktreeBaseDir: resolveWorktreeBaseDir(env),
+    });
+    allocator.close();
+
+    const results = runMigrateChecks(env);
+    const worktreeAllocator = results.find((result) => result.name === "worktree-allocator");
+
+    // It exists now, so it must be really opened and reported -- never "skipped".
+    expect(worktreeAllocator?.ok).toBe(true);
+    expect(worktreeAllocator?.status).toBe("up-to-date");
+    expect(worktreeAllocator?.versionAfter).toBe(worktreeAllocator?.versionBefore);
+    // ...and the sweep resolves its base dir from the SAME env it was handed, never the ambient process.env.
+    expect(worktreeAllocator?.dbPath).toBe(resolveWorktreeAllocatorDbPath(env));
   });
 
   it("runMigrate prints human-readable text (exit 0) and machine JSON with --json, and exits 1 when a store fails", () => {
