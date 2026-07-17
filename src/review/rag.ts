@@ -433,6 +433,19 @@ export async function embedTexts(
 }
 
 // ── Index write (used by ingestion): embed + vector upsert + chunk-text store ─────────────────────
+/** #6685-followup (review_context_fetch_failed/rag_upsert_error, 538 occurrences over 2+ weeks): a chunk's
+ *  source text can legitimately contain a raw NUL byte (binary content misdetected as text, a corrupted
+ *  file, certain generated/minified output) -- Postgres's `text` type rejects it outright ("invalid byte
+ *  sequence for encoding UTF8: 0x00"), unlike SQLite's more permissive TEXT columns, which is why this only
+ *  ever surfaced on the Postgres-backed self-host deployment. `db.batch` runs the whole statement list as
+ *  one transaction, so a single NUL byte anywhere in a batch previously poisoned every other, otherwise-fine
+ *  chunk's upsert too. Strips only U+0000 (Postgres's actual constraint) rather than the broader control-
+ *  character ranges other sanitizers in this codebase use for *display* text -- this is source code being
+ *  embedded/retrieved, where a real tab/newline/other control character can be meaningful. */
+function stripNullBytes(text: string): string {
+  return text.includes("\u0000") ? text.replaceAll("\u0000", "") : text;
+}
+
 /** Upsert chunks: write text to the storage table (source of truth) + vectors+light metadata to the vector
  *  index. Returns the number upserted (0 on any failure — ingestion treats that as "try again later").
  *  `blobSha` (#4365) is the source file's git blob SHA at index time, stamped onto every chunk row for
@@ -465,7 +478,7 @@ export async function upsertChunks(infra: RagInfra, project: string, repo: strin
       db.prepare(
         "INSERT INTO repo_chunks (id, project, repo, path, chunk_index, kind, text, blob_sha) VALUES (?,?,?,?,?,?,?,?) " +
           "ON CONFLICT(id) DO UPDATE SET text=excluded.text, kind=excluded.kind, chunk_index=excluded.chunk_index, blob_sha=excluded.blob_sha, updated_at=CURRENT_TIMESTAMP",
-      ).bind(c.id, project, repo, c.path, c.chunkIndex, c.kind, c.text, blobSha ?? null),
+      ).bind(c.id, project, repo, c.path, c.chunkIndex, c.kind, stripNullBytes(c.text), blobSha ?? null),
     );
     await db.batch(stmts);
     return embedded.length;
