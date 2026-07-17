@@ -30,10 +30,6 @@ import { buildSlopAssessment, SLOP_RUBRIC_MARKDOWN } from "@loopover/engine/sign
 import { buildTestEvidenceReport } from "@loopover/engine/signals/test-evidence";
 // #6754: the same pure evaluator the remote MCP tool + /v1/loop/evaluate-escalation both call.
 import { evaluateEscalation } from "@loopover/engine";
-// #6752: the same pure composer the remote MCP tool + /v1/loop/results-payload both call.
-import { buildResultsPayload } from "@loopover/engine";
-// #6755: the same pure bridge the remote MCP tool + /v1/loop/intake-idea both call.
-import { validateIdeaSubmission, buildTaskGraph } from "@loopover/engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -96,7 +92,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "onboarding-pack"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -549,35 +545,6 @@ const evaluateEscalationShape = {
   killRequested: z.boolean().optional(),
 };
 
-// #6755: mirrors intakeIdeaShape in src/mcp/server.ts exactly, so the local tool, the remote tool, and the REST
-// route all accept an identical payload. Deliberately loose -- validateIdeaSubmission owns the real checks.
-const intakeIdeaShape = {
-  id: z.string().optional(),
-  title: z.string().optional(),
-  body: z.string().optional(),
-  targetRepo: z.string().optional(),
-  constraints: z.array(z.string()).max(50).optional(),
-  acceptanceHints: z.array(z.string()).max(50).optional(),
-  priority: z.string().optional(),
-  decomposition: z
-    .array(z.object({ key: z.string(), title: z.string(), body: z.string(), dependsOn: z.array(z.string()).max(50).optional() }))
-    .max(50)
-    .optional(),
-};
-
-// #6752: mirrors buildResultsPayloadShape in src/mcp/server.ts exactly, so the local tool, the remote tool, and
-// the REST route all accept an identical payload.
-const resultsPayloadShape = {
-  repoFullName: z.string().min(1),
-  prNumber: z.number().int().nullable().optional(),
-  title: z.string(),
-  changedFiles: z
-    .array(z.object({ path: z.string(), additions: z.number().int().optional(), deletions: z.number().int().optional() }))
-    .max(5000)
-    .optional(),
-  status: z.enum(["open", "merged", "closed"]).optional(),
-};
-
 // #6749: mirrors checkTestEvidenceShape in src/mcp/server.ts VERBATIM (same bounds, same optionality).
 const checkTestEvidenceShape = {
   changedPaths: z.array(z.string().min(1).max(400)).max(2000),
@@ -594,46 +561,6 @@ const suggestBoundaryTestsShape = {
     .optional(),
   tests: z.array(z.string().max(400)).max(2000).optional(),
   testFiles: z.array(z.string().max(400)).max(2000).optional(),
-};
-
-// #6751: mirrors simulateOpenPrPressureShape in src/mcp/server.ts VERBATIM. The bin cannot import from src/
-// (package boundary), so this copy is the one place parity is by convention rather than construction — the
-// route parses with the tool's own exported shape, and mcp-cli-open-pr-pressure-tool.test.ts pins that a
-// payload this shape accepts is one the route accepts too.
-const simulateOpenPrPressureCount = z.number().int().min(0).max(1000000);
-const simulateOpenPrPressureShape = {
-  repoFullName: z.string().min(3).max(200),
-  generatedAt: z.string().min(1).max(100),
-  queueHealth: z
-    .object({
-      repoFullName: z.string().min(3).max(200),
-      generatedAt: z.string().min(1).max(100),
-      burdenScore: z.number().finite(),
-      level: z.enum(["low", "medium", "high", "critical"]),
-      summary: z.string().max(1000),
-      signals: z
-        .object({
-          openIssues: simulateOpenPrPressureCount,
-          openPullRequests: simulateOpenPrPressureCount,
-          unlinkedPullRequests: simulateOpenPrPressureCount,
-          stalePullRequests: simulateOpenPrPressureCount,
-          draftPullRequests: simulateOpenPrPressureCount,
-          maintainerAuthoredPullRequests: simulateOpenPrPressureCount,
-          collisionClusters: simulateOpenPrPressureCount,
-          ageBuckets: z
-            .object({ under7Days: simulateOpenPrPressureCount, days7To30: simulateOpenPrPressureCount, over30Days: simulateOpenPrPressureCount })
-            .passthrough(),
-          likelyReviewablePullRequests: simulateOpenPrPressureCount,
-          cachedOpenPullRequests: simulateOpenPrPressureCount.optional(),
-          likelyReviewablePullRequestsSource: z.enum(["cache", "sampled_cache", "authoritative"]).optional(),
-        })
-        .passthrough(),
-      findings: z.array(z.unknown()).max(100),
-    })
-    .passthrough()
-    .nullable(),
-  roleContext: z.object({ maintainerLane: z.boolean() }).passthrough(),
-  contributorOpenPrCount: simulateOpenPrPressureCount.optional(),
 };
 
 const checkSlopRiskShape = {
@@ -946,12 +873,6 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns slopRisk (0-100), band, findings, and the rubric. Computed in-process; no repo data and no API round-trip.",
   },
   {
-    name: "loopover_simulate_open_pr_pressure",
-    category: "discovery",
-    description:
-      "Rank what-if scenarios for easing a repo's open-PR pressure from already-computed queue-health metadata — deterministic, public-safe, and read-only. Needs no repo access and performs no GitHub writes.",
-  },
-  {
     name: "loopover_suggest_boundary_tests",
     category: "review",
     description:
@@ -968,18 +889,6 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "agent",
     description:
       "Decide whether a rented loop needs a human, and what action to take, from an already-computed run outcome, health tier, and operator/customer signals — the deterministic support/escalation-path logic. Source-free; returns shouldEscalate + action (none/notify/human_review/stop) + severity + reasons. It decides; the caller wires the action. Computed in-process; no API round-trip.",
-  },
-  {
-    name: "loopover_build_results_payload",
-    category: "agent",
-    description:
-      "Package a completed loop iteration into the customer-facing result (#4801): a PR link, a plain-language summary, and a bounded diff preview, from already-computed iteration metadata. Deterministic and source-free — it formats the result, it does not fetch, open, or deliver anything. Computed in-process; no API round-trip.",
-  },
-  {
-    name: "loopover_intake_idea",
-    category: "agent",
-    description:
-      "Turn a freeform renter idea into a strict, claimable task-graph (spec #4779) and score it against the same feasibility gate the loop runs on. Deterministic and source-free: validates the submission, assembles constituent issues (an optional caller-supplied decomposition, else a single-issue baseline), and returns the graph plus its go/raise/avoid verdict. A malformed or empty submission returns an actionable error list, not a silent failure. Computed in-process; no API round-trip.",
   },
   {
     name: "loopover_check_issue_slop",
@@ -1033,6 +942,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "maintainer",
     description:
       "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private LoopOver API.",
+  },
+  {
+    name: "loopover_get_maintainer_lane",
+    category: "maintainer",
+    description:
+      "Return the repo's maintainer-lane triage report (the lane recommendation alongside the configured maintainer cut, queue health, config quality, and contributor-intake health) from the private LoopOver API. Advisory only.",
   },
   {
     name: "loopover_get_burden_forecast",
@@ -1541,19 +1456,6 @@ registerStdioTool(
   (input) => toolResult("LoopOver slop-risk self-check.", { ...buildSlopAssessment(input), rubric: SLOP_RUBRIC_MARKDOWN }),
 );
 
-// #6751: CLI mirror of the remote server's loopover_simulate_open_pr_pressure. Proxies rather than computing
-// in-process (like the boundary-tests mirror, #6750): simulateOpenPrPressure lives app-side in
-// src/services/open-pr-pressure-scenarios.ts, not in @loopover/engine, so POST /v1/lint/open-pr-pressure stays
-// the single source of truth for the ranking.
-registerStdioTool(
-  "loopover_simulate_open_pr_pressure",
-  {
-    description: stdioToolDescription("loopover_simulate_open_pr_pressure"),
-    inputSchema: simulateOpenPrPressureShape,
-  },
-  async (input) => toolResult("LoopOver open-PR pressure simulation.", await apiPost("/v1/lint/open-pr-pressure", input)),
-);
-
 // #6750: CLI mirror of the remote server's loopover_suggest_boundary_tests. Unlike its check_slop_risk sibling
 // this one PROXIES rather than computing in-process: the builders live app-side (src/signals/
 // boundary-test-generation.ts, which depends on the app's AdvisoryFinding type), not in @loopover/engine, so
@@ -1589,39 +1491,6 @@ registerStdioTool(
   // (src/mcp/server.ts) and the /v1/loop/evaluate-escalation route both call, so all three surfaces return a
   // byte-identical decision for identical input, and escalation checks work fully offline.
   (input) => toolResult("LoopOver escalation decision.", evaluateEscalation(input)),
-);
-
-registerStdioTool(
-  "loopover_build_results_payload",
-  {
-    description: stdioToolDescription("loopover_build_results_payload"),
-    inputSchema: resultsPayloadShape,
-  },
-  // Computed in-process from @loopover/engine (#6752) — the same pure buildResultsPayload the remote server
-  // (src/mcp/server.ts) and the /v1/loop/results-payload route both call, so all three surfaces return an
-  // identical payload for identical input, and results composition works fully offline.
-  (input) => toolResult("LoopOver loop results payload.", buildResultsPayload(input)),
-);
-
-registerStdioTool(
-  "loopover_intake_idea",
-  {
-    description: stdioToolDescription("loopover_intake_idea"),
-    inputSchema: intakeIdeaShape,
-  },
-  // Computed in-process from @loopover/engine (#6755) — the same pure validateIdeaSubmission/buildTaskGraph the
-  // remote server (src/mcp/server.ts) and the /v1/loop/intake-idea route both call, reproducing the tool's
-  // handler exactly so all three surfaces return an identical payload for identical input, fully offline.
-  (input) => {
-    const validated = validateIdeaSubmission(input);
-    if (!validated.ok) return toolResult(`Invalid idea submission: ${validated.errors.join(", ")}.`, { ok: false, errors: validated.errors });
-    const taskGraph = buildTaskGraph(validated.idea, input.decomposition);
-    return toolResult(`Task-graph verdict: ${taskGraph.rubric.verdict} across ${taskGraph.issues.length} issue(s).`, {
-      ok: true,
-      verdict: taskGraph.rubric.verdict,
-      taskGraph,
-    });
-  },
 );
 
 registerStdioTool(
@@ -1760,6 +1629,23 @@ registerStdioTool(
       repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
       generatedAt: intelligence?.generatedAt,
       labelAudit: intelligence?.labelAudit ?? null,
+    });
+  },
+);
+
+registerStdioTool(
+  "loopover_get_maintainer_lane",
+  {
+    description: stdioToolDescription("loopover_get_maintainer_lane"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const intelligence = await apiGet(`${prefix}/intelligence`);
+    return toolResult("LoopOver maintainer lane.", {
+      repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
+      generatedAt: intelligence?.generatedAt,
+      maintainerLane: intelligence?.maintainerLane ?? null,
     });
   },
 );
@@ -2933,7 +2819,6 @@ function printMaintainHelp() {
       `                               actions: ${MAINTAIN_ACTION_CLASSES.join(", ")}`,
       `                               levels:  ${MAINTAIN_AUTONOMY_LEVELS.join(", ")}`,
       "  precision [--window-days N]  Show gate false-positive telemetry (blocked-then-merged per gate type).",
-      "  onboarding-pack [--refresh]  Preview the repo's contributor onboarding pack.",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -3040,25 +2925,7 @@ async function maintainCli(args) {
     emit(payload, lines.join("\n"));
     return;
   }
-  if (subcommand === "onboarding-pack") {
-    // #6738: session-authenticated mirror of GET /onboarding-pack/preview (and the remote
-    // loopover_get_repo_onboarding_pack tool). Bare `--refresh` becomes options.refresh === true via
-    // parseOptions; omit the query otherwise so the default matches the precision-style GET pattern
-    // (server treats only the exact string "true" as a refresh).
-    const query = options.refresh === true ? "?refresh=true" : "";
-    const payload = await apiGet(`${repoBase}/onboarding-pack/preview${query}`);
-    emit(
-      payload,
-      [
-        `LoopOver onboarding pack preview for ${repoFullName} (preview-only, not published).`,
-        sanitizePlainTextTerminalOutput(JSON.stringify(payload.preview ?? payload, null, 2)),
-      ].join("\n"),
-    );
-    return;
-  }
-  throw new Error(
-    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | onboarding-pack.`,
-  );
+  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision.`);
 }
 
 async function runCli(args) {
