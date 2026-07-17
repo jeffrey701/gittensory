@@ -24,7 +24,7 @@ export const EVENT_LEDGER_RETENTION_SPEC = { table: "miner_event_ledger", timest
 export const GOVERNOR_LEDGER_RETENTION_SPEC = { table: "governor_events", timestampColumn: "ts", orderColumn: "id" };
 export const PREDICTION_LEDGER_RETENTION_SPEC = { table: "predictions", timestampColumn: "ts", orderColumn: "id" };
 
-/** Fixed purge specs (#5564, #6599) for the six stores whose rows are directly scoped by a `repoColumn`. Same
+/** Fixed purge specs (#5564, #6599) for the seven stores whose rows are directly scoped by a `repoColumn`. Same
  *  internal-constant-only discipline as the retention specs above. `attempt-log.js` is deliberately absent: its
  *  payload is a free-form `Record<string, unknown>` with no dedicated repo column, so a precise per-repo purge
  *  isn't possible there without risking false matches — `purge-cli.js` reports it as not-purgeable instead. */
@@ -34,6 +34,9 @@ export const GOVERNOR_LEDGER_PURGE_SPEC = { table: "governor_events", repoColumn
 export const PREDICTION_LEDGER_PURGE_SPEC = { table: "predictions", repoColumn: "repo_full_name" };
 export const PORTFOLIO_QUEUE_PURGE_SPEC = { table: "miner_portfolio_queue", repoColumn: "repo_full_name" };
 export const RUN_STATE_PURGE_SPEC = { table: "miner_run_state", repoColumn: "repo_full_name" };
+// #6987: policy_verdict_cache is keyed by `repo_scope` (a genuine per-repo PRIMARY KEY), so it fits the same
+// per-repo purge pattern as the six above and was simply never wired in.
+export const POLICY_VERDICT_CACHE_PURGE_SPEC = { table: "policy_verdict_cache", repoColumn: "repo_scope" };
 
 const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

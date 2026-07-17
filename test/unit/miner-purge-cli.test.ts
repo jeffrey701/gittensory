@@ -11,6 +11,7 @@ import {
   closeDefaultPortfolioQueueStore,
 } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 import { initRunStateStore, closeDefaultRunStateStore } from "../../packages/loopover-miner/lib/run-state.js";
+import { initPolicyVerdictCacheStore } from "../../packages/loopover-miner/lib/policy-verdict-cache.js";
 import { initAttemptLog, closeDefaultAttemptLog } from "../../packages/loopover-miner/lib/attempt-log.js";
 import {
   ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
@@ -76,7 +77,7 @@ describe("parsePurgeArgs (#5564)", () => {
 });
 
 describe("runPurge --dry-run (#5564, #6599)", () => {
-  it("counts matching rows across the six real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
+  it("counts matching rows across the seven real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
     const root = tempDir();
     const claimDbPath = join(root, "claim-ledger.sqlite3");
     const eventDbPath = join(root, "event-ledger.sqlite3");
@@ -128,6 +129,12 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     runState.setRunState("acme/other", "idle");
     runState.close();
 
+    const policyVerdictDbPath = join(root, "policy-verdict-cache.sqlite3");
+    const policyVerdict = initPolicyVerdictCacheStore(policyVerdictDbPath);
+    policyVerdict.put("acme/widgets", "AI-USAGE.md", '"v1"', { allowed: true, matchedPhrase: null, source: "AI-USAGE.md" });
+    policyVerdict.put("acme/other", "AI-USAGE.md", '"v1"', { allowed: true, matchedPhrase: null, source: "AI-USAGE.md" });
+    policyVerdict.close();
+
     const resolveDbPaths = {
       "claim-ledger": () => claimDbPath,
       "event-ledger": () => eventDbPath,
@@ -135,6 +142,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "prediction-ledger": () => predictionDbPath,
       "portfolio-queue": () => portfolioDbPath,
       "run-state": () => runStateDbPath,
+      "policy-verdict-cache": () => policyVerdictDbPath,
       "attempt-log": () => attemptLogDbPath,
     };
 
@@ -151,6 +159,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
         { store: "prediction-ledger", wouldPurge: 0 },
         { store: "portfolio-queue", wouldPurge: 2 },
         { store: "run-state", wouldPurge: 1 },
+        { store: "policy-verdict-cache", wouldPurge: 1 },
       ],
       attemptLogNote: ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
       attemptLogTotalRows: 0,
@@ -180,12 +189,13 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "prediction-ledger": () => join(root, "prediction-ledger.sqlite3"),
       "portfolio-queue": () => join(root, "portfolio-queue.sqlite3"),
       "run-state": () => join(root, "run-state.sqlite3"),
+      "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"], { resolveDbPaths })).toBe(0);
     const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-    expect(result.stores).toHaveLength(6);
+    expect(result.stores).toHaveLength(7);
     expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
     expect(result.attemptLogTotalRows).toBe(0);
     for (const resolve of Object.values(resolveDbPaths)) {
@@ -283,6 +293,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       LOOPOVER_MINER_PREDICTION_LEDGER_DB: process.env.LOOPOVER_MINER_PREDICTION_LEDGER_DB,
       LOOPOVER_MINER_PORTFOLIO_QUEUE_DB: process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB,
       LOOPOVER_MINER_RUN_STATE_DB: process.env.LOOPOVER_MINER_RUN_STATE_DB,
+      LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB: process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB,
       LOOPOVER_MINER_ATTEMPT_LOG_DB: process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB,
     };
     process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB = join(root, "claim-ledger.sqlite3");
@@ -291,12 +302,13 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     process.env.LOOPOVER_MINER_PREDICTION_LEDGER_DB = join(root, "prediction-ledger.sqlite3");
     process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB = join(root, "portfolio-queue.sqlite3");
     process.env.LOOPOVER_MINER_RUN_STATE_DB = join(root, "run-state.sqlite3");
+    process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB = join(root, "policy-verdict-cache.sqlite3");
     process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB = join(root, "attempt-log.sqlite3");
     try {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"])).toBe(0);
       const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-      expect(result.stores).toHaveLength(6);
+      expect(result.stores).toHaveLength(7);
       expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
       // Nothing was created — dry run against nonexistent default-path stores makes zero writes.
       expect(existsSync(process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB)).toBe(false);
@@ -323,6 +335,7 @@ describe("runPurge (real, #5564, #6599)", () => {
     const prediction = fakeStore(3);
     const portfolio = fakeStore(4);
     const runState = fakeStore(1);
+    const policyVerdict = fakeStore(1);
     const options = {
       openClaimLedger: () => claim,
       initEventLedger: () => event,
@@ -330,6 +343,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initPredictionLedger: () => prediction,
       initPortfolioQueueStore: () => portfolio,
       initRunStateStore: () => runState,
+      initPolicyVerdictCacheStore: () => policyVerdict,
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -338,7 +352,7 @@ describe("runPurge (real, #5564, #6599)", () => {
     expect(summary).toMatchObject({
       outcome: "purged",
       repoFullName: "acme/widgets",
-      totalPurged: 11,
+      totalPurged: 12,
       stores: [
         { store: "claim-ledger", purged: 2 },
         { store: "event-ledger", purged: 1 },
@@ -346,6 +360,7 @@ describe("runPurge (real, #5564, #6599)", () => {
         { store: "prediction-ledger", purged: 3 },
         { store: "portfolio-queue", purged: 4 },
         { store: "run-state", purged: 1 },
+        { store: "policy-verdict-cache", purged: 1 },
         { store: "attempt-log", purged: null, note: ATTEMPT_LOG_NOT_PURGEABLE_NOTE },
       ],
     });
@@ -361,7 +376,7 @@ describe("runPurge (real, #5564, #6599)", () => {
     log.mockClear();
     expect(runPurge(["--repo", "acme/widgets"], options as never)).toBe(0);
     const text = String(log.mock.calls[0]?.[0]);
-    expect(text).toContain("Purged 11 row(s) for acme/widgets");
+    expect(text).toContain("Purged 12 row(s) for acme/widgets");
     expect(text).toContain("claim-ledger=2");
     expect(text).toContain("portfolio-queue=4");
     expect(text).toContain("run-state=1");
