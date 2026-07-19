@@ -328,6 +328,16 @@ describe("buildUnifiedCommentBody interaction-GIF wiring (#interaction-gif-captu
     const body = buildUnifiedCommentBody({ ...base, beforeAfter: routes });
     expect(body).not.toContain("Interaction preview");
   });
+
+  it("renders Interaction preview as the ONLY visual section when no beforeAfter/scroll routes are configured at all (no prior collapsible to spread onto)", () => {
+    const body = buildUnifiedCommentBody({
+      ...base,
+      interactions: [{ selector: ".x", label: "Menu hover", afterGifUrl: "https://api.example.dev/loopover/shot?key=loopover/shots/x.gif" }],
+    });
+    expect(body).not.toContain("Visual preview");
+    expect(body).not.toContain("Scroll preview");
+    expect(body).toContain("Interaction preview");
+  });
 });
 
 describe("buildUnifiedCommentBody scroll-GIF wiring (#3612)", () => {

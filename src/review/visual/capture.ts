@@ -811,8 +811,11 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
       // specific action is safe to perform" once there. hover never mutates state, so it's the only action
       // still captured against production (real before/after comparison value); click/drag are preview-only.
       const beforePage = interaction.action === "hover" && prodBase ? joinUrl(prodBase, interactionPath) : "";
+      // beforePage is passed unconditionally (relying on captureInteractionGif's own `!page` guard) rather
+      // than ternary-gated here -- mirrors captureScrollGif's call above (line 767), which does the same for
+      // its own "before" side.
       const [beforeGifUrl, afterGifUrl] = await Promise.all([
-        beforePage ? captureInteractionGif(env, target, beforePage, "before", interaction, interactionTheme, themeStorageKey) : Promise.resolve<string | undefined>(undefined),
+        captureInteractionGif(env, target, beforePage, "before", interaction, interactionTheme, themeStorageKey),
         afterPage ? captureInteractionGif(env, target, afterPage, "after", interaction, interactionTheme, themeStorageKey) : Promise.resolve<string | undefined>(undefined),
       ]);
       if (beforeGifUrl || afterGifUrl) {

@@ -5318,7 +5318,7 @@ describe("review.visual.bugAnalysis (PR-intent-aware vision + out-of-scope issue
 
   it("composes with gif — both configured independently and both round-trip", () => {
     const m = parseFocusManifest({ review: { visual: { bug_analysis: true, gif: true } } });
-    expect(m.review.visual).toEqual({ productionUrl: null, preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: [], gif: true, enabled: null, themeStorageKey: null, actionsFallback: false, bugAnalysis: true });
+    expect(m.review.visual).toEqual({ productionUrl: null, preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: [], gif: true, enabled: null, themeStorageKey: null, actionsFallback: false, bugAnalysis: true, interactions: [] });
     expect(reviewConfigToJson(m.review)).toEqual({ visual: { gif: true, bug_analysis: true } });
   });
 

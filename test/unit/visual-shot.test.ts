@@ -688,6 +688,31 @@ describe("captureInteractionFrames (#interaction-gif-capture)", () => {
     expect(mocks.reload).toHaveBeenCalledWith({ waitUntil: "networkidle0", timeout: 20000 });
   });
 
+  it("REGRESSION (security review): times out a hostile theme localStorage write before reload, mirroring captureShot/captureScrollFrames", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.evaluate.mockImplementation((fn: (...fnArgs: unknown[]) => unknown, ...fnArgs: unknown[]) => {
+        if (fnArgs.length > 0) return new Promise(() => undefined);
+        try {
+          fn(...fnArgs);
+        } catch {
+          // expected — see default mock comment above.
+        }
+        return Promise.resolve(undefined);
+      });
+
+      const result = captureInteractionFrames(env(), "https://preview.pages.dev/page", ".x", "hover", { width: 1440, height: 900 }, { theme: "dark", themeStorageKey: "theme" });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(result).resolves.toEqual({ frames: [], authWalled: false });
+      expect(mocks.reload).not.toHaveBeenCalled();
+      expect(mocks.screenshot).not.toHaveBeenCalled();
+      expect(mocks.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flags authWalled and captures no frames on a login-page redirect", async () => {
     mocks.finalUrl = "https://preview.pages.dev/login";
     const result = await captureInteractionFrames(env(), "https://preview.pages.dev/dashboard", ".x", "hover", { width: 1440, height: 900 });
@@ -762,6 +787,13 @@ describe("captureInteractionFrames (#interaction-gif-capture)", () => {
     expect(mocks.screenshot).not.toHaveBeenCalled();
   });
 
+  it("swallows a close() rejection in the finally block", async () => {
+    mocks.close.mockRejectedValueOnce(new Error("close failed"));
+    const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".x", "hover", { width: 1440, height: 900 });
+    expect(result.authWalled).toBe(false);
+    expect(mocks.close).toHaveBeenCalled();
+  });
+
   describe("drag action (#interaction-gif-capture drag support)", () => {
     it("drags the source onto the destination via mouse down/interpolated-move/up, using each element's bounding-box center", async () => {
       mocks.boundingBox.mockResolvedValueOnce({ x: 0, y: 0, width: 100, height: 40 }).mockResolvedValueOnce({ x: 400, y: 200, width: 60, height: 60 });
@@ -790,6 +822,16 @@ describe("captureInteractionFrames (#interaction-gif-capture)", () => {
       mocks.waitForSelector.mockImplementation(async (selector: string) =>
         selector === ".done-column" ? null : { hover: mocks.hover, click: mocks.click, boundingBox: mocks.boundingBox },
       );
+      const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 }, {}, ".done-column");
+      expect(result).toEqual({ frames: [], authWalled: false });
+      expect(mocks.mouseDown).not.toHaveBeenCalled();
+    });
+
+    it("returns no frames (fails open, never throws) when waiting for the drag destination selector itself rejects", async () => {
+      mocks.waitForSelector.mockImplementation(async (selector: string) => {
+        if (selector === ".done-column") throw new Error("timed out");
+        return { hover: mocks.hover, click: mocks.click, boundingBox: mocks.boundingBox };
+      });
       const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 }, {}, ".done-column");
       expect(result).toEqual({ frames: [], authWalled: false });
       expect(mocks.mouseDown).not.toHaveBeenCalled();
@@ -824,11 +866,30 @@ describe("captureInteractionFrames (#interaction-gif-capture)", () => {
       expect(mocks.scrollIntoViewIfNeeded).toHaveBeenCalledTimes(2);
     });
 
-    it("still performs the drag (never throws) when scrollIntoViewIfNeeded itself rejects", async () => {
-      mocks.scrollIntoViewIfNeeded.mockRejectedValueOnce(new Error("scroll failed"));
+    it("still performs the drag (never throws) when scrollIntoViewIfNeeded itself rejects, for BOTH the source and the destination", async () => {
+      // mockRejectedValue (not -Once) rejects every call — both the source's scrollIntoViewIfNeeded (before
+      // reading its bounding box) and the destination's (a separate call, same shared element mock) reject,
+      // exercising both catch sites independently rather than just the first one reached.
+      mocks.scrollIntoViewIfNeeded.mockRejectedValue(new Error("scroll failed"));
       const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 }, {}, ".done-column");
       expect(result.frames).toHaveLength(4);
       expect(mocks.mouseDown).toHaveBeenCalledTimes(1);
+      expect(mocks.scrollIntoViewIfNeeded).toHaveBeenCalledTimes(2);
+    });
+
+    it("still performs the drag when an element has no scrollIntoViewIfNeeded method at all (optional per the ElementHandle-subset type)", async () => {
+      mocks.waitForSelector.mockImplementation(async (selector: string) =>
+        selector === ".done-column"
+          ? { hover: mocks.hover, click: mocks.click, boundingBox: mocks.boundingBox }
+          : { hover: mocks.hover, click: mocks.click, boundingBox: mocks.boundingBox, scrollIntoViewIfNeeded: mocks.scrollIntoViewIfNeeded },
+      );
+      const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 }, {}, ".done-column");
+      expect(result.frames).toHaveLength(4);
+      // Source still scrolls (it has the method); destination has none, so optional chaining short-circuits
+      // to undefined rather than throwing — the drag itself still completes using its bounding box as-is.
+      expect(mocks.scrollIntoViewIfNeeded).toHaveBeenCalledTimes(1);
+      expect(mocks.mouseDown).toHaveBeenCalledTimes(1);
+      expect(mocks.mouseUp).toHaveBeenCalledTimes(1);
     });
   });
 });
