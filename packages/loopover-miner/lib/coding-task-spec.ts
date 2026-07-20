@@ -87,10 +87,29 @@ export type CodingTaskSpecResult =
 // taskBrief via buildPromptPacket): that scrubs economic/identity terms and local paths, not
 // manipulation-shaped instructions, so both layers run and neither substitutes for the other.
 
+// Emit the shared prompt_injection_neutralized audit event for any agent-facing embed of neutralized
+// issue text (buildTaskBrief + buildInstructions). Kept as one helper so both call sites stay byte-identical
+// (#7441 audit parity with #4795).
+function logPromptInjectionNeutralized(
+  issueNumber: number,
+  title: { injected: boolean },
+  body: { injected: boolean },
+): void {
+  if (!title.injected && !body.injected) return;
+  console.log(
+    JSON.stringify({
+      event: "prompt_injection_neutralized",
+      issueNumber,
+      fields: [title.injected ? "title" : null, body.injected ? "body" : null].filter(Boolean),
+    }),
+  );
+}
+
 function buildTaskBrief(issue: any) {
-  const title = neutralizePromptInjection(issue.title).text;
-  const body = neutralizePromptInjection((issue.body ?? "").trim()).text;
-  return body ? `${title}\n\n${body}` : title;
+  const title = neutralizePromptInjection(issue.title);
+  const body = neutralizePromptInjection((issue.body ?? "").trim());
+  logPromptInjectionNeutralized(issue.number, title, body);
+  return body.text ? `${title.text}\n\n${body.text}` : title.text;
 }
 
 function buildConstraints(issue: any) {
@@ -256,15 +275,7 @@ function buildValidationGuidance(stack: any) {
 function buildInstructions(issue: any, acceptanceCriteriaPath: any, stack: any) {
   const title = neutralizePromptInjection(issue.title);
   const body = neutralizePromptInjection((issue.body ?? "").trim());
-  if (title.injected || body.injected) {
-    console.log(
-      JSON.stringify({
-        event: "prompt_injection_neutralized",
-        issueNumber: issue.number,
-        fields: [title.injected ? "title" : null, body.injected ? "body" : null].filter(Boolean),
-      }),
-    );
-  }
+  logPromptInjectionNeutralized(issue.number, title, body);
   return [
     `Resolve the following GitHub issue in this repository: #${issue.number} -- ${title.text}`,
     "",
