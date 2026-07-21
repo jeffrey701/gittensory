@@ -6,29 +6,26 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { closeFixtureServer, startFixtureServer } from "./support/mcp-cli-harness";
 
-// (#7799, updated for #7764) In-process coverage of the stdio loopover_get_activation_preview proxy.
-// After #7764 the bin only binds StdioServerTransport when launched as the process entrypoint; in-process
-// importers get the exported `server` and must connect an InMemoryTransport themselves (same pattern as
-// mcp-cli-plan-issues.test.ts / mcp-cli-registry-snapshot.test.ts). The pre-#7764 StdioServerTransport mock
-// deadlocks once another file imports the bin first — that is what broke validate-tests on #7913.
+// #7803: in-process coverage for the loopover_get_registry_snapshot stdio tool in
+// packages/loopover-mcp/bin/loopover-mcp.ts. Same #7764 entrypoint-guard pattern as
+// mcp-cli-plan-issues.test.ts — import the .ts source (not a gitignored .js build artifact), hold the
+// exported `server`, and connect an in-memory transport so v8/Codecov attributes the new registerStdioTool
+// lines. Subprocess spawn alone does not instrument the bin (that is why #7903's bin-only PR got 0% patch).
 const MODULES = ["../../packages/loopover-mcp/bin/loopover-mcp.ts"] as const;
 
 type BinModule = {
   server: { connect: (transport: unknown) => Promise<void> };
 };
 
-const FORBIDDEN_PUBLIC_TERMS =
-  /wallet\s*[:=]\s*\S+|hotkey\s*[:=]\s*\S+|coldkey\s*[:=]\s*\S+|raw trust score is|your trust score|reward estimate is|estimated reward/i;
-
 let tempDir = "";
 const capturedRequests: Array<{ url: string; method: string }> = [];
 const loaded = new Map<string, BinModule>();
 
 beforeAll(async () => {
-  tempDir = mkdtempSync(join(tmpdir(), "loopover-activation-preview-"));
+  tempDir = mkdtempSync(join(tmpdir(), "loopover-registry-snapshot-"));
   const apiUrl = await startFixtureServer({
     onApiRequest: (request) => {
-      if (request.url && request.url.includes("/activation-preview")) {
+      if (request.url === "/v1/registry/snapshot") {
         capturedRequests.push({ url: request.url ?? "", method: request.method ?? "GET" });
       }
     },
@@ -52,34 +49,27 @@ afterAll(async () => {
   delete process.env.LOOPOVER_SKIP_NPM_VERSION_CHECK;
 });
 
-describe("bin loopover_get_activation_preview stdio tool (in-process, #7799)", () => {
-  it.each(MODULES)("registers and proxies GET .../activation-preview — %s", async (specifier) => {
+describe("bin loopover_get_registry_snapshot stdio tool (in-process, #7803)", () => {
+  it.each(MODULES)("registers and proxies GET /v1/registry/snapshot — %s", async (specifier) => {
     capturedRequests.length = 0;
     const mod = loaded.get(specifier)!;
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await mod.server.connect(serverTransport);
-    const client = new Client({ name: "activation-preview-test", version: "0.1.0" }, { capabilities: {} });
+    const client = new Client({ name: "registry-snapshot-test", version: "0.1.0" }, { capabilities: {} });
     await client.connect(clientTransport);
     try {
       const { tools } = await client.listTools();
-      const tool = tools.find((entry) => entry.name === "loopover_get_activation_preview");
+      const tool = tools.find((entry) => entry.name === "loopover_get_registry_snapshot");
       expect(tool).toBeDefined();
-      expect(tool?.description).toMatch(/activation preview/i);
+      expect(tool?.description).toMatch(/registry snapshot/i);
 
-      const result = await client.callTool({
-        name: "loopover_get_activation_preview",
-        arguments: { owner: "owner", repo: "repo" },
-      });
-      expect(capturedRequests.length).toBe(1);
-      const captured = capturedRequests[0]!;
-      expect(captured.url).toContain("/v1/repos/owner/repo/activation-preview");
-      expect(captured.method).toBe("GET");
+      const result = await client.callTool({ name: "loopover_get_registry_snapshot", arguments: {} });
       expect(result.isError).toBeFalsy();
-      const text = JSON.stringify(result);
-      expect(text).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
-      expect(text).toContain("owner/repo");
-      expect(text).toContain("evaluatedCount");
-      expect(text).toContain("enable_advisory");
+      expect(capturedRequests).toEqual([{ url: "/v1/registry/snapshot", method: "GET" }]);
+      expect(result.structuredContent).toMatchObject({
+        id: "fixture-snapshot",
+        repoCount: 1,
+      });
     } finally {
       await client.close().catch(() => undefined);
     }
