@@ -13,6 +13,7 @@
 import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN, PUBLIC_UNSAFE_PATTERN } from "../signals/redaction";
 import { deliverRecapToDiscord, deliverRecapToSlack } from "./notify-discord";
 import type { GatePrecisionReport } from "./gate-precision";
+import type { DriftRecapSection } from "./maintainer-recap-drift";
 import type { OutcomeCalibration } from "./outcome-calibration";
 import type { MaintainerRecapCohortCounts, MaintainerRecapRepo, RecapReport } from "../types";
 import { nowIso } from "../utils/json";
@@ -161,7 +162,7 @@ function recapSectionLines(items: string[], fallback: string): string[] {
  *  (Summary, Totals, Per-repo), mirroring formatWeeklyValueReportMarkdown at weekly-value-report.ts. PURE
  *  string function — no delivery, no I/O. Every free-text value is routed through {@link redactRecapLine} so no
  *  reward/trust/score/path term can leak into the digest even if the input report was hand-built. (#2240) */
-export function formatMaintainerRecap(report: RecapReport): string {
+export function formatMaintainerRecap(report: RecapReport, options: { configDrift?: DriftRecapSection } = {}): string {
   const { totals } = report;
   const rate = totals.gateFalsePositiveRate !== null ? `${Math.round(totals.gateFalsePositiveRate * 100)}%` : "n/a";
   const perRepoLines = report.repos.map(
@@ -188,6 +189,11 @@ export function formatMaintainerRecap(report: RecapReport): string {
     "",
     "## Per-repo",
     ...recapSectionLines(perRepoLines, "_No repositories in this window._"),
+    // #8214: optional config-drift section (maintainer-recap-drift.ts) — appended only when the caller has a
+    // sentinel projection to render, so every existing digest stays byte-identical until the sentinel wires in.
+    ...(options.configDrift
+      ? ["", `## ${redactRecapLine(options.configDrift.title)}`, ...recapSectionLines(options.configDrift.lines, "_No drift lines for this window._")]
+      : []),
   ];
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }

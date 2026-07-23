@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatMaintainerRecap } from "../../src/services/maintainer-recap";
+import { buildDriftRecapSection } from "../../src/services/maintainer-recap-drift";
 import type { RecapReport } from "../../src/types";
 
 const GEN = "2026-07-08T00:00:00.000Z";
@@ -32,6 +33,9 @@ describe("formatMaintainerRecap (#2240)", () => {
     expect(body).toContain("## Summary");
     expect(body).toContain("## Totals");
     expect(body).toContain("## Per-repo");
+    // #8214: without a sentinel projection the drift section is entirely absent — the digest stays
+    // byte-identical to the pre-drift shape, not a dangling empty header.
+    expect(body).not.toContain("## Config drift");
     // Empty sections show a single fallback line instead of dangling under the header.
     expect(body).toContain("_No summary lines for this window._");
     expect(body).toContain("_No repositories in this window._");
@@ -39,6 +43,21 @@ describe("formatMaintainerRecap (#2240)", () => {
     expect(body).toContain("- Gate false positives: 0/0 (n/a)");
     expect(body).toContain("- Repos: 0");
     // Trailing single newline, no run of >2 blank lines.
+    expect(body.endsWith("\n")).toBe(true);
+    expect(body).not.toMatch(/\n{3,}/);
+  });
+
+  it("appends the #8214 config-drift section as bullet lines when the caller supplies a sentinel projection", () => {
+    const configDrift = buildDriftRecapSection({
+      generatedAt: GEN,
+      sentinelEnabled: false,
+      drifting: [],
+      cleanKnobs: 0,
+    });
+    const body = formatMaintainerRecap(emptyReport(), { configDrift });
+    expect(body).toContain("## Config drift");
+    expect(body).toContain("- drift sentinel disabled — no drift evaluation ran this window.");
+    // The appended section keeps the digest's formatting invariants.
     expect(body.endsWith("\n")).toBe(true);
     expect(body).not.toMatch(/\n{3,}/);
   });
