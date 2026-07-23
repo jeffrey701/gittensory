@@ -10,6 +10,7 @@ import {
   destroyTenantContainer,
   PINNED_VERSION_ENV_VAR,
   TENANT_SECRET_ENV_VAR,
+  SENTRY_DSN_ENV_VAR,
   tenantContainerExists,
   type ContainerDriverConfig,
   type ContainerNamespaceLike,
@@ -223,4 +224,47 @@ test("a repeat create of an already-provisioned tenant with a bootstrap secret n
   await createTenantContainer(configFor(stub), { tenant: { name: "acme" }, product: "orb", bootstrapSecret: "orbsec_xyz" });
 
   assert.deepEqual(stub.startOptions, []);
+});
+
+// #7876: the hosted fleet's central Sentry DSN rides into every tenant container at cold boot as
+// SENTRY_DSN_ENV_VAR — the exact self-host var its own process reads via src/selfhost/sentry.ts's opt-in
+// init, so pointing the fleet at central telemetry is purely injecting the value, not a second mechanism.
+function configWithDsn(stub: ContainerStubLike, centralSentryDsn: string): ContainerDriverConfig {
+  return { bindings: { orb: { getByName: () => stub } }, centralSentryDsn };
+}
+
+test("a container starts with SENTRY_DSN_ENV_VAR when the config carries the central DSN (#7876)", async () => {
+  const stub = optionCapturingStub();
+
+  await createTenantContainer(configWithDsn(stub, "https://k@o0.ingest.sentry.io/1"), { tenant: { name: "acme" }, product: "orb" });
+
+  assert.deepEqual(stub.startOptions, [{ envVars: { [SENTRY_DSN_ENV_VAR]: "https://k@o0.ingest.sentry.io/1" } }]);
+});
+
+test("the central DSN merges with pinnedVersion + bootstrapSecret into one start() call (#7876)", async () => {
+  const stub = optionCapturingStub();
+
+  await createTenantContainer(configWithDsn(stub, "https://k@o0.ingest.sentry.io/1"), {
+    tenant: { name: "acme", pinnedVersion: "v1.4.2" },
+    product: "orb",
+    bootstrapSecret: "orbsec_xyz",
+  });
+
+  assert.deepEqual(stub.startOptions, [
+    {
+      envVars: {
+        [PINNED_VERSION_ENV_VAR]: "v1.4.2",
+        [TENANT_SECRET_ENV_VAR]: "orbsec_xyz",
+        [SENTRY_DSN_ENV_VAR]: "https://k@o0.ingest.sentry.io/1",
+      },
+    },
+  ]);
+});
+
+test("a config with no central DSN never injects SENTRY_DSN — byte-identical to today for an otherwise-plain tenant (#7876)", async () => {
+  const stub = optionCapturingStub();
+
+  await createTenantContainer(configFor(stub), { tenant: { name: "acme" }, product: "orb" });
+
+  assert.deepEqual(stub.startOptions, [undefined]);
 });

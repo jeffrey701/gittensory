@@ -40,6 +40,11 @@ export type ContainerDriverConfig = {
    *  `product` string `TenantProvisioningRequest` carries; an unconfigured product is a real
    *  misconfiguration, not a silent no-op (see `bindingFor`). */
   bindings: Record<Product, ContainerNamespaceLike>;
+  /** The hosted fleet's central Sentry DSN (#7876), injected into every tenant container at cold boot as
+   *  {@link SENTRY_DSN_ENV_VAR} so its self-host process reports to it. Omitted/blank ⇒ containers start with
+   *  no injected DSN, byte-identical to the pre-#7876 call — the platform simply isn't reporting yet (e.g.
+   *  before #7875 provisions the secret). Sourced from the control-plane's own env in driver-factory.ts. */
+  centralSentryDsn?: string;
 };
 
 export type ContainerDriver = {
@@ -75,21 +80,34 @@ export const PINNED_VERSION_ENV_VAR = "LOOPOVER_PINNED_VERSION";
  *  actually has custodied -- this driver never sees or needs to know what that is. */
 export const TENANT_SECRET_ENV_VAR = "LOOPOVER_TENANT_SECRET_TOKEN";
 
+/** The env var a tenant's container reads its Sentry DSN from at cold boot (#7876, implements #4934). A tenant
+ *  container runs an unmodified self-host image (root Dockerfile for ORB; packages/loopover-miner/Dockerfile
+ *  for AMS), whose process already inits error reporting from this exact var via the opt-in `initSentry`
+ *  pattern (`src/selfhost/sentry.ts`: a complete no-op when unset) — so pointing the hosted fleet at the
+ *  central DSN is purely INJECTING that value here, never a second Sentry-wiring mechanism. Deliberately the
+ *  self-host name `SENTRY_DSN` (not a hosted-only alias): the image's own init reads this and only this, and a
+ *  self-hoster who sets their own `SENTRY_DSN` is completely unaffected — this only supplies a value the
+ *  hosted platform would otherwise leave unset. The value is a control-plane secret (provisioned by #7875),
+ *  never hardcoded or committed. */
+export const SENTRY_DSN_ENV_VAR = "SENTRY_DSN";
+
 /** Idempotent: an already-provisioned tenant's container is left running as-is, never restarted -- a repeat
  *  create must not interrupt a container mid-work. This is also the ONLY point in a tenant's lifecycle where
  *  `envVars` actually reach the container (confirmed against the real `@cloudflare/containers` SDK: a `start()`
  *  call against an already-running/starting instance is a no-op or throws, never re-applies `envVars`) -- so
- *  both of the values below must already be known by the time this runs, not supplied later. A tenant with a
- *  `pinnedVersion` (#4898) starts with that version in {@link PINNED_VERSION_ENV_VAR}; one with a
+ *  all three of the values below must already be known by the time this runs, not supplied later. A tenant with
+ *  a `pinnedVersion` (#4898) starts with that version in {@link PINNED_VERSION_ENV_VAR}; one with a
  *  `bootstrapSecret` (#8202, set on `request` by `provisionTenant` from `injectSecrets`' result) starts with it
- *  in {@link TENANT_SECRET_ENV_VAR}; a tenant with neither gets the exact pre-#4898 `start()` call, so every
- *  existing tenant's behavior is byte-identical until either rollout applies. */
+ *  in {@link TENANT_SECRET_ENV_VAR}; and when the config carries a central Sentry DSN (#7876) every container
+ *  starts with it in {@link SENTRY_DSN_ENV_VAR}. A tenant with none of them gets the exact pre-#4898 `start()`
+ *  call, so every existing tenant's behavior is byte-identical until a rollout applies. */
 export async function createTenantContainer(config: ContainerDriverConfig, request: TenantProvisioningRequest): Promise<void> {
   const stub = bindingFor(config, request.product).getByName(instanceNameFor(request));
   if (await stub.isProvisioned()) return;
   const envVars: Record<string, string> = {};
   if (request.tenant.pinnedVersion) envVars[PINNED_VERSION_ENV_VAR] = request.tenant.pinnedVersion;
   if (request.bootstrapSecret) envVars[TENANT_SECRET_ENV_VAR] = request.bootstrapSecret;
+  if (config.centralSentryDsn) envVars[SENTRY_DSN_ENV_VAR] = config.centralSentryDsn;
   if (Object.keys(envVars).length > 0) {
     await stub.start({ envVars });
   } else {

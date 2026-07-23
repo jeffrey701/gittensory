@@ -24,6 +24,12 @@ declare global {
      *  (a plain var, see wrangler.jsonc); createTenantProvisioningDriver falls back to the fake otherwise.
      *  Genuinely sensitive: whoever holds it can call every internal admin route in the main app. */
     INTERNAL_JOB_TOKEN?: string;
+    /** The hosted fleet's central Sentry DSN (#7876, implements #4934), provisioned as a secret by #7875.
+     *  createTenantProvisioningDriver injects it into every tenant container as `SENTRY_DSN` so the container's
+     *  own self-host process reports to it (`src/selfhost/sentry.ts`'s opt-in init). Unset ⇒ containers start
+     *  with no injected DSN, byte-identical to today. A DSN is a write-only ingest URL rather than a
+     *  credential, but it's kept a secret (never a committed var) so the hosted ingest endpoint isn't public. */
+    SENTRY_DSN?: string;
   }
 }
 

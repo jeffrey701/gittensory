@@ -75,7 +75,12 @@ export function createTenantProvisioningDriver(
   }
 
   if (containerBindings && Object.keys(containerBindings).length > 0) {
-    driver = withRealContainerDriver(driver, createContainerDriver({ bindings: containerBindings }));
+    // #7876: point every tenant container at the hosted fleet's central Sentry DSN when the control-plane
+    // secret is set (per #7875). Blank/unset ⇒ omitted, so containers start byte-identical to pre-#7876.
+    driver = withRealContainerDriver(
+      driver,
+      createContainerDriver({ bindings: containerBindings, ...(nonBlank(env.SENTRY_DSN) ? { centralSentryDsn: nonBlank(env.SENTRY_DSN) } : {}) }),
+    );
   }
 
   const mainAppBaseUrl = nonBlank(env.MAIN_APP_BASE_URL);

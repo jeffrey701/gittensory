@@ -66,6 +66,7 @@ export {
   instanceNameFor,
   PINNED_VERSION_ENV_VAR,
   TENANT_SECRET_ENV_VAR,
+  SENTRY_DSN_ENV_VAR,
   tenantContainerExists,
   type ContainerDriver,
   type ContainerDriverConfig,

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import {
   createFakeTenantProvisioningDriver,
   createTenantProvisioningDriver,
+  SENTRY_DSN_ENV_VAR,
   withRealContainerDriver,
   withRealDatabaseDriver,
   withRealSecretDriver,
@@ -16,6 +17,32 @@ import {
   type SecretDriver,
   type TenantProvisioningRequest,
 } from "../dist/index.js";
+
+/** A container namespace whose stub records each `start()` call's options — lets a factory test assert what
+ *  the composed container driver actually injects (the shared fake above deliberately discards options). */
+function capturingContainerNamespace(): ContainerNamespaceLike & { startOptions: Parameters<ContainerStubLike["start"]>[0][] } {
+  const startOptions: Parameters<ContainerStubLike["start"]>[0][] = [];
+  let flag = false;
+  const stub: ContainerStubLike = {
+    async start(options) {
+      startOptions.push(options);
+      flag = true;
+    },
+    async stop() {
+      flag = false;
+    },
+    async isProvisioned() {
+      return flag;
+    },
+    async markProvisioned() {
+      flag = true;
+    },
+    async markDeprovisioned() {
+      flag = false;
+    },
+  };
+  return { getByName: () => stub, startOptions };
+}
 
 function fakeContainerNamespace(provisioned = false): ContainerNamespaceLike {
   let flag = provisioned;
@@ -170,6 +197,26 @@ test("createTenantProvisioningDriver: selects the real container driver when con
   assert.equal(await driver.containerExists(REQUEST), false);
   await driver.createContainer(REQUEST);
   assert.equal(await driver.containerExists(REQUEST), true);
+});
+
+test("createTenantProvisioningDriver: injects env.SENTRY_DSN into tenant containers when set (#7876)", async () => {
+  const orb = capturingContainerNamespace();
+  const driver = createTenantProvisioningDriver({ SENTRY_DSN: "https://k@o0.ingest.sentry.io/1" }, { orb });
+
+  await driver.createContainer(REQUEST);
+
+  assert.deepEqual(orb.startOptions, [{ envVars: { [SENTRY_DSN_ENV_VAR]: "https://k@o0.ingest.sentry.io/1" } }]);
+});
+
+test("createTenantProvisioningDriver: a blank or unset SENTRY_DSN injects nothing — containers start as before (#7876)", async () => {
+  for (const env of [{}, { SENTRY_DSN: "" }, { SENTRY_DSN: "   " }]) {
+    const orb = capturingContainerNamespace();
+    const driver = createTenantProvisioningDriver(env, { orb });
+
+    await driver.createContainer(REQUEST);
+
+    assert.deepEqual(orb.startOptions, [undefined]);
+  }
 });
 
 test("createTenantProvisioningDriver: composes both the real database driver AND the real container driver together", async () => {
