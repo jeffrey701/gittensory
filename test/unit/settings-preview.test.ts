@@ -134,6 +134,28 @@ describe("decidePublicSurface", () => {
     expect(decision).toMatchObject({ skipped: false, willComment: false, willLabel: false, willCheckRun: false, actions: ["none"] });
     expect(decision.summary).toMatch(/no surface action is enabled/);
   });
+
+  // #8324: the oss_maintainer + not_checked fallback in willLabel (settings-preview.ts:149). For this combo
+  // shouldApplyPrLabel always returns false (line 39), so the inline second disjunct alone decides willLabel —
+  // exercise every operand of its && chain. (The false sides of the audienceMode/minerStatus operands are already
+  // covered by the confirmed / gittensor_only cases above.)
+  it("applies the oss_maintainer + not_checked label fallback per autoLabelEnabled and publicSurface", () => {
+    const decide = (over: Partial<RepositorySettings>) =>
+      decidePublicSurface({
+        settings: settings({ publicAudienceMode: "oss_maintainer", commentMode: "off", checkRunMode: "off", ...over }),
+        authorLogin: "drive-by",
+        authorType: "User",
+        authorAssociation: "NONE",
+        minerStatus: "not_checked",
+      });
+    // autoLabelEnabled + a label-bearing surface → the fallback applies the label.
+    expect(decide({ autoLabelEnabled: true, publicSurface: "comment_and_label" })).toMatchObject({ willLabel: true, actions: ["label"] });
+    expect(decide({ autoLabelEnabled: true, publicSurface: "label_only" })).toMatchObject({ willLabel: true, actions: ["label"] });
+    // comment-only surface → no label even with autoLabel on (the disjunct's own publicSurface check excludes it).
+    expect(decide({ autoLabelEnabled: true, publicSurface: "comment_only" }).willLabel).toBe(false);
+    // autoLabel off → the fallback can't apply the label; falls back to shouldApplyPrLabel's (also false) result.
+    expect(decide({ autoLabelEnabled: false, publicSurface: "comment_and_label" }).willLabel).toBe(false);
+  });
 });
 
 describe("buildRepoSettingsPreview", () => {
