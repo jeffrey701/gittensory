@@ -461,4 +461,22 @@ describe("pending PR scenario detection", () => {
     expect(records.pullRequestChecks).toHaveLength(0);
     vi.restoreAllMocks();
   });
+
+  // #8329: exercise both branches of sameLogin's `value &&` short-circuit and the case-insensitive matching of
+  // sameRepoFullName/sameLogin — a ghost/deleted account (null/undefined authorLogin) must be excluded, while a
+  // repoFullName or login that differs only in letter case must still match.
+  it("excludes null/undefined authorLogin and matches case-insensitively on repo and login", async () => {
+    const env = {} as Env;
+    vi.spyOn(repositories, "listPullRequestReviews").mockImplementation(async (_env, _repo, pullNumber) => [approvedReview(pullNumber)]);
+    vi.spyOn(repositories, "listCheckSummaries").mockResolvedValue([]);
+    const records = await loadContributorRepoOpenPrSignalRecords(env, "entrius/allways-ui", "miner-a", [
+      pr({ number: 80, authorLogin: null }), // ghost account → sameLogin short-circuits to excluded
+      pr({ number: 81, authorLogin: undefined }), // deleted account → excluded
+      pr({ number: 82, repoFullName: "Entrius/Allways-UI" }), // repo differs only in case → still matches
+      pr({ number: 83, authorLogin: "Miner-A" }), // login differs only in case → still matches
+    ]);
+    // Only the two case-differing (but genuinely matching) PRs are counted; both ghost-account PRs are excluded.
+    expect(records.pullRequestReviews.map((review) => review.pullNumber).sort((a, b) => a - b)).toEqual([82, 83]);
+    vi.restoreAllMocks();
+  });
 });
